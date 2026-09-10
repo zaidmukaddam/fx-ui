@@ -1,0 +1,28 @@
+{
+  "name": "fx-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot app.tsx",
+    "build": "bun build --compile app.tsx --outfile dist/fx",
+    "screenshot": "bun screenshot.ts",
+    "test": "FX_UI_HOME=.tmp-test-home vitest run",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "rm -f node_modules/@gpuix/native/gpuix-native.darwin-arm64.node && cp vendor/gpuix-native.darwin-arm64.node node_modules/@gpuix/native/"
+  },
+  "dependencies": {
+    "@gpuix/react": "^0.7.0",
+    "libfx": "^0.0.8",
+    "react": "^19.2.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/react": "^19.2.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.0.18"
+  },
+  "patchedDependencies": {
+    "@gpuix/react@0.7.0": "patches/@gpuix%2Freact@0.7.0.patch"
+  }
+}

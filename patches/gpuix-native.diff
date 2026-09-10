@@ -1,0 +1,101 @@
+diff --git a/packages/native/src/custom_elements/input.rs b/packages/native/src/custom_elements/input.rs
+index 3f2ee7f..db9609d 100644
+--- a/packages/native/src/custom_elements/input.rs
++++ b/packages/native/src/custom_elements/input.rs
+@@ -360,6 +360,7 @@ impl CustomElement for TextEditorElement {
+                     line_starts: vec![0],
+                     last_bounds: None,
+                     line_height: px(20.0),
++                    font_size: px(13.0),
+                     content_height: 20.0,
+                     content_width: 0.0,
+                     display_is_placeholder: false,
+@@ -584,6 +585,7 @@ struct TextEditorState {
+     line_starts: Vec<usize>,
+     last_bounds: Option<Bounds<Pixels>>,
+     line_height: Pixels,
++    font_size: Pixels,
+     content_height: f32,
+     content_width: f32,
+     display_is_placeholder: bool,
+@@ -1022,6 +1024,8 @@ impl TextEditorState {
+         }
+         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+             self.replace_text_in_range(None, &text, window, cx);
++        } else {
++            cx.propagate();
+         }
+     }
+
+@@ -1309,6 +1313,7 @@ impl TextEditorState {
+         };
+         let font_size = style.font_size.to_pixels(window.rem_size());
+         self.line_height = window.line_height();
++        self.font_size = font_size;
+         let color = if is_placeholder {
+             gpui::rgba(0x8f8f8fff).into()
+         } else {
+@@ -1720,10 +1725,15 @@ impl gpui::Element for EditorTextElement {
+             let caret_point = input
+                 .point_for_index(input.cursor_offset())
+                 .unwrap_or(point(px(0.0), px(0.0)));
++            let row = f32::from(input.line_height);
++            let height = (f32::from(input.font_size) * 1.2).min(row);
+             caret = Some(fill(
+                 Bounds::new(
+-                    point(origin.x + caret_point.x, origin.y + caret_point.y),
+-                    size(px(2.0), input.line_height),
++                    point(
++                        origin.x + caret_point.x,
++                        origin.y + caret_point.y + px((row - height) / 2.0),
++                    ),
++                    size(px(2.0), px(height)),
+                 ),
+                 input.caret_color,
+             ));
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+index d66ab63..b0a4997 100644
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -1481,6 +1481,41 @@ impl GpuixRenderer {
+         ))
+     }
+
++    #[napi]
++    pub fn prompt_for_paths(&self, element_id: f64, multiple: bool) -> Result<()> {
++        #[cfg(target_os = "macos")]
++        {
++            let callback = self.event_callback_for_view();
++            update_window(move |_view, _window, cx| {
++                let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
++                    files: true,
++                    directories: false,
++                    multiple,
++                    prompt: None,
++                });
++                cx.spawn(async move |_, _| {
++                    if let Ok(Ok(Some(paths))) = chosen.await {
++                        let value = paths
++                            .iter()
++                            .map(|path| path.to_string_lossy().into_owned())
++                            .collect::<Vec<_>>()
++                            .join("\n");
++                        emit_event_full(&callback, element_id as u64, "change", |payload| {
++                            payload.value = Some(value);
++                        });
++                    }
++                })
++                .detach();
++            })
++        }
++
++        #[cfg(not(target_os = "macos"))]
++        {
++            let _ = (element_id, multiple);
++            Err(Error::from_reason("prompt_for_paths is only wired up on macOS"))
++        }
++    }
++
+     #[napi]
+     pub fn focus_element(&self, element_id: f64) -> Result<()> {
+         let id = to_element_id(element_id)?;
