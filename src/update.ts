@@ -53,8 +53,11 @@ async function downloadAndInstall(dmgUrl: string, appPath: string): Promise<void
   await Bun.write(dmgPath, response)
 
   try {
-    const signed = await capture("codesign", ["-dv", "--verify", dmgPath], { timeoutMs: 30_000 })
-    if (!`${signed.stdout}\n${signed.stderr}`.includes(SIGN_IDENTITY)) {
+    const requirement = `anchor apple generic and certificate leaf[subject.CN] = "${SIGN_IDENTITY}"`
+    const signed = await capture("codesign", ["--verify", `-R=${requirement}`, dmgPath], {
+      timeoutMs: 30_000,
+    })
+    if (signed.code !== 0) {
       throw new Error("the downloaded update is not signed by fx-ui's Developer ID, refusing to install it")
     }
 
