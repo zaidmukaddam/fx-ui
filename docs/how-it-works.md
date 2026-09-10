@@ -1,0 +1,369 @@
+# How fx-ui works
+
+The long version of the [README](../README.md): what each feature does, and why
+it works the way it does. What the platforms underneath do that you could not
+guess is in [PLATFORM.md](../PLATFORM.md).
+
+## The agent
+
+The agent is [`libfx`](https://fx.sh/docs/lib), running in this process as a
+native addon. The embedded fx core has no filesystem, shell or built-in tools.
+It can only do what the host hands it, so this app supplies a set of tools
+scoped to one workspace directory and puts every edit and command behind an
+approval you can see before it runs.
+
+## Features
+
+### Workspaces
+
+A workspace is a directory. Everything the agent reads, edits or runs stays
+inside it. Paths are resolved through the real filesystem, so a symlink cannot
+walk out either.
+
+### Sessions
+
+Each workspace holds any number of conversations. History is saved as a libfx
+checkpoint, so a session resumes after a restart. The first prompt names the
+session straight away, and a short request to the model, sent alongside the
+first turn, replaces that with a proper title. If the request fails, the next
+message tries again. Click the title in the pane header, or use *Rename this
+session* in the palette, to name it yourself; a generated title never
+overwrites a name you set. A session you leave without sending anything is
+dropped, not kept.
+
+### Split view
+
+Two panes, each on its own session, with a draggable divider. `⌘\` opens and
+closes it. The pane the keyboard talks to keeps its title at full brightness
+while the other dims.
+
+### Command palette
+
+`⌘K` searches commands, workspaces and sessions.
+
+### Notices
+
+The app's own messages, like a stop reason or a catalogue that would not load,
+sit in the transcript. They are the one kind of row you can dismiss: click one,
+or use *Clear notices* for a screenful. A request the provider turns down shows
+here as an error, not as the model's reply. Sign-in state is not among them.
+It belongs to settings, which shows it as it is now rather than as of an hour
+ago.
+
+### Settings
+
+The gear in the sidebar footer, `⌘,`, or the palette opens it. It is a full
+page in place of the panes, with the Gateway key, the sign-ins, the model new
+sessions start on, which runtime answers a turn, and the skills and MCP servers
+that are loaded. It reads from disk each time it opens, because a sign-in is a
+file, not something the app's state can derive. Opening a session is how you
+leave it.
+
+### Approvals
+
+Writes and commands stop and ask, with the diff or the exact command line in
+front of you. The three answers mirror fx's own prompt: yes, yes and don't ask
+again, and no. What a session may now do without asking is listed under the
+permission mode in the composer footer, which shows a shield while there is
+any, and each entry can be forgotten there. *Forget what this session may do
+without asking* in the palette clears them all.
+
+### Permission modes
+
+`ask`, `auto` and `full access`, mapped from
+[fx's modes](https://fx.sh/docs/configure-fx/permissions). `auto` runs edits and
+still asks before a command.
+
+### Grok and Codex sign-in
+
+Settings signs in to either with a PKCE flow against `auth.x.ai` or
+`auth.openai.com`, and offers that subscription's own models. The addon libfx
+loads is built for the Gateway only, so the routing happens in the `fetch` the
+host supplies. [src/agent/providers.ts](../src/agent/providers.ts) intercepts
+the one model request the core makes, translates it into an OpenAI Responses
+call, and translates the answer back. The session's `provider` decides where a
+turn goes, and the model id is the provider's own. Both sign-ins have exacting,
+undocumented requirements, written down in [PLATFORM.md](../PLATFORM.md).
+
+### The fx CLI as the core
+
+*Run through the fx CLI* points `createFxAgent` at `fx acp` through its
+`runtimeFactory`. That is the same core built with every provider, answering to
+whatever `fx login` stored in `~/.fx`, which helps with a sign-in this app does
+not carry. Tools, approvals, skills, MCP and checkpoints ride on the same ACP
+messages either way. Transport diagnostics are lost, since the CLI makes its
+own requests. It needs fx 0.0.7 or newer.
+
+### Model picker
+
+It lists whatever can actually answer: a signed-in subscription's models, plus
+the Gateway's when there is a key. The Gateway catalogue is not fetched without
+a key, since none of it could be spent. Subscription catalogues are read at
+startup and the whole list is saved with the rest of the state, so a relaunch
+opens the picker on what it had instead of on nothing while three requests
+land. Switching a model checkpoints the conversation and restores it into a
+new agent, because the model is a creation option.
+
+### What a new session starts on
+
+If you have set *New sessions start on* in settings, every new session opens on
+that model, because an explicit choice outranks anything inherited. Left on
+*Automatic*, a session follows the last one in that workspace: model, provider,
+effort and fast tier together, since a model id without the provider that
+serves it routes nowhere. The first session in a workspace has nothing to
+follow, so it opens on a signed-in subscription's own model, the first its
+catalogue lists (which is also the first the picker shows). It falls back to
+`poolside/laguna-s-2.1-free` on the Gateway only when no subscription is signed
+in. Neither provider publishes which model it considers the default, so the
+order they list them in is the only thing to go on. Whichever rule applies, a
+model nothing could answer with is skipped: a Gateway model with no key in hand
+gives way to a subscription.
+
+### Reasoning effort
+
+Every provider publishes the levels a model accepts and which one is the
+default: Grok's `reasoning_efforts` and Codex's `supported_reasoning_levels`,
+which differ per model. The composer's slider offers exactly those, and the shim
+sends the choice as `reasoning: { effort }`. Changing it restarts the
+conversation from its checkpoint, the same as changing the model. The chip in
+the composer footer opens the dial, a pill track with a dot per level and a
+round handle, which is the shape Claude Code uses. A pill and a circle also
+avoid GPUI's refusal to clip children to a parent's radius, which a fill
+running to the track's edge would run into.
+
+### Fast tier
+
+Codex sells a faster service tier on some of its models and says how much
+faster in its own words: 2x on GPT-6-Astra, 1.5x on the GPT-5.6 line, and
+nothing at all on Daybreak Blue or Spark. The composer shows the toggle only
+where the model has one, labelled and explained with the provider's own text,
+and the choice is sent as `service_tier: "priority"`. Grok publishes no such
+tier, so nothing is offered there.
+
+### Context meter and plan usage
+
+The ring at the end of the composer footer shows how full the model's context
+window is: the last request's input plus what it wrote, against the window the
+model's catalogue publishes. Click it for the split across messages, system
+prompt, tools, MCP tools, skills and free space. The total is the provider's
+own count, taken on every request. The split is an estimate at four characters
+a token, and whatever it leaves over counts as messages. It replaced a running
+count of every token billed, which grew with each tool call and said nothing
+about how close the conversation was to the limit.
+
+On a subscription the popover also shows the plan's usage, read off the
+headers of every reply. Codex sends the plan and each usage window with when it
+resets. Grok sends the requests and tokens left.
+
+### Skills
+
+fx's own skills live in `.fx/skills` in the workspace and in `~/.fx-ui/skills`,
+and go into the prompt whole. Skills written for Claude Code and Codex are
+picked up too, from `.claude/skills/<name>/SKILL.md` and
+`.agents/skills/<name>/SKILL.md`, in the workspace and in your home folder.
+They show in the `/` menu, and the prompt carries a list of them: each name
+with its description, trimmed evenly so the whole list stays within 16,000
+characters however many there are. A skill's full text is sent only when you
+invoke it or the model reads it with the `skill` tool, because there can be
+hundreds of them and all that text would fill the context window. A name in the
+workspace beats the same name at home, and `.fx` beats both.
+
+### MCP servers, local and remote
+
+Settings adds one from a single line: an `https://…` URL for a remote server,
+or the command line that starts a local one. Removing it there takes it out of
+the running sessions as well. Either way it lands in `~/.fx-ui/mcp.json`, which
+stays hand-editable and keeps whatever else you have in it.
+
+A remote server that answers `401` is not a failed load. It becomes a row in
+settings with a Sign in button, and the rest of the session carries on without
+it. Signing in runs the MCP authorization flow: the `WWW-Authenticate`
+challenge names the protected-resource metadata, that names the authorization
+server, this app registers itself there dynamically, and a PKCE round trip
+through your browser returns a token bound to that one server by `resource`.
+Tokens live in `~/.fx-ui/mcp-auth.json` at mode 600 and refresh themselves.
+Nothing opens a browser mid-turn. A server that needs you appears as a notice,
+and you sign in when you choose to.
+
+### Images
+
+⌘V pastes an image from the clipboard, such as a screenshot or a copied image,
+through the [patched gpuix build](../README.md#the-patched-gpuix-binary). In the
+**+** menu, *Paste image* reads the clipboard directly, which also takes an
+image file copied in Finder whatever text that copy carries. *Choose images…*
+picks them from disk, and `@screenshot.png` mentions one in the workspace.
+Clipboard text still pastes as text. Attached images sit as thumbnails above
+the prompt until it is sent, then under your message, where a click opens one
+in Preview. Each is copied into `~/.fx-ui/attachments`, so the conversation
+keeps it when the original moves.
+
+libfx cannot carry an image in a prompt at all. Its SDK rejects image prompt
+blocks outright, and a tool result's images are dropped before they leave the
+core. So an image is handed over as a path with an instruction to look at it,
+and `vision` reads it on the session's own credential. `vision` reaches the
+attachments folder and nothing else outside the workspace.
+
+### Background commands
+
+A command started with `shell` background true used to run unseen until the
+session closed. The composer now shows how many are live and stops any of them,
+and the row disappears when one exits on its own. Each runs in its own process
+group, so stopping one ends everything it started, and quitting fx stops them
+all.
+
+### Sessions keep going when you switch
+
+A turn belongs to its session, not the pane showing it, so switching sessions
+or panes leaves it running. The sidebar dot shows it working, and a shield or a
+speech bubble in its place means it is waiting on you, for an approval or an
+answer. A turn does not survive quitting the app: the conversation picks up
+from the last finished turn.
+
+### Copying an answer
+
+The answer that ends a turn has a copy button under it.
+
+### Undo the last write
+
+`⌘K` → *Undo the edit to …* puts a file back as it was, or deletes it if that
+write created it. It refuses when the file has changed since, so a newer change
+is never thrown away. The last twenty writes of a session are remembered.
+
+### Project instructions
+
+`AGENTS.md` (or `CLAUDE.md`) at the workspace root is loaded into the system
+instructions, the way the fx CLI does it.
+
+## Tools the agent gets
+
+The set fx documents at
+[capabilities/tools](https://fx.sh/docs/capabilities/tools), plus git.
+
+| Area | Tools | Approval |
+| --- | --- | --- |
+| Find and read | `glob_files`, `grep_files`, `read_file`, `list_files` | none, inside the workspace |
+| Write and edit | `write_file`, `edit_file` | asks, and shows the unified diff |
+| Commands | `shell` with `run`, `interact` and `stop` | asks every time, and grants are per program |
+| Web | `web_search`, `web_fetch` | asks; `web_fetch` grants per host |
+| Images | `vision` | none |
+| Skills | `skill`, `install_skill` | `install_skill` asks |
+| Subagents | `subagent` | inherits the parent's approvals |
+| MCP | `capability_search`, `mcp_features`, `mcp_select_tool`, plus every connected server tool | a server's own tools ask, and grants are per server |
+| Interaction | `ask_user_question`, `read_tool_result` | none |
+| Git | `git_status`, `git_diff`, `git_log` | none, they only read |
+
+`subagent` and `vision` run on whatever credential the session runs on. Every
+model whose catalogue reports an `image` input modality can read one, which is
+both providers' whole line except Codex Spark. So `vision` sends the image as an
+`input_image` part on the subscription, and falls back to the Gateway only when
+the session has no provider or its model takes text alone.
+
+Search works the same way, and its catalogue flag decides. Grok and Codex both
+run web search on their own side, so a session on one of those models searches
+through the provider: the host `web_search` is withdrawn, the Gateway key stops
+mattering, and every query and opened page becomes its own row in the
+transcript. Grok also gets its X search tool, so it can search posts and users
+on X, and each of those searches shows as an `x_search` row with its query.
+Those rows report a search after the fact. A search that runs inside the
+response cannot be approved before it happens, which makes it the one tool this
+app shows but could not stop. A Gateway session keeps the host tool, Exa, and
+the approval.
+
+A result larger than 24k is kept whole and returned as a preview plus a handle,
+and `read_tool_result` reads a byte range or searches it. Nothing is cut off.
+
+## Motion
+
+There are three animations. This is a keyboard-driven tool, and motion on
+anything reached hundreds of times a day reads as lag, so the command palette,
+the `@` picker and every transcript row stay instant on purpose.
+
+- The sidebar's width as it collapses and expands, and the folded sidebar
+  peeking out over the panes. Both use the same 160 to 200ms ease-out, because
+  they are the same surface arriving the same way.
+- The effort dial's handle and trail, 150ms, easing to the level you picked
+  instead of jumping to it. It drops to zero while dragging, since a drag has to
+  track the pointer exactly.
+- The braille mark on the empty screens, fading in over 300ms. It is the one
+  place with a delight budget, and it is spent once.
+
+## Design
+
+The palette and the type are fx.sh's own: `--background: #000`,
+`--foreground: #ededed`, `--border: #262626` and `--primary: #ededed` on black,
+with one monospace family for the whole interface. That system has no accent
+hue, so this app has none either. The only white edge on screen is the approval
+card that is blocking the turn.
+
+`<markdown>`, `<code>` and `<diff>` are GPUI native elements. The syntax
+highlighting and the diff are computed in Rust, and the theme is passed to them
+as props.
+
+## Where the code lives
+
+```
+app.tsx              the shell: panes, split view, window shortcuts
+libfx.d.ts           types for the part of libfx this app calls
+src/store.ts         state, persistence, and the actions that mutate it
+
+src/agent/           what answers a turn
+  agent.ts           one libfx Agent per session, streaming into the store
+  backing.ts         what backs a session: its key, runtime, route and search
+  credentials.ts     keys, sign-ins, and the model list
+  oauth.ts           PKCE sign-in to Grok and Codex, and the tokens it stores
+  providers.ts       the request shim that routes a turn to a subscription
+  cli.ts             the fx binary as the core, for the sign-in it owns
+
+src/tools/           what the agent can do
+  index.ts           the set handed to the core, and this folder's surface
+  kit.ts             defineTool: the transcript row, the retained-result store
+  approvals.ts       the approval and question brokers
+  edits.ts           what each write replaced, so it can be put back
+  paths.ts           path confinement, the file index, globs
+  files.ts           list, read, grep, glob, write, edit
+  shell.ts           commands, foreground and background
+  web.ts             search, fetch, vision
+  vcs.ts             git status, diff, log
+  agents.ts          subagent, read_tool_result, ask_user_question
+  extend.ts          skills and MCP
+
+src/workspace/       the machine a workspace sits on
+  files.ts           @-mentions and file ranking
+  git.ts             git for the pane header and the tools
+  images.ts          pasting and choosing images, and keeping them
+  run.ts             spawning a process and capturing it
+  skills.ts          skills from .fx, .claude and .agents
+  mcp/               connected MCP servers
+    index.ts         config to connected tools, and the pool that shares them
+    config.ts        ~/.fx-ui/mcp.json: a command, or a url
+    stdio.ts         a server this app spawns
+    http.ts          a server it reaches over Streamable HTTP
+    auth.ts          the MCP authorization flow, and the tokens it stores
+
+src/ui/              primitives
+  theme.ts           design tokens, taken from fx.sh's stylesheet
+  ui.tsx             buttons, labels, tooltips, the effort dial
+  icons.tsx          the icon set
+  hooks.ts           useMountEffect
+
+src/views/           screens
+  sidebar.tsx        workspaces and sessions
+  palette.tsx        command palette and dialogs
+  settings.tsx       the settings page
+  models.tsx         choosing a model, in the composer and in settings
+  transcript/        the conversation
+    index.tsx        the list, its scroll fades, and which row renders what
+    shared.tsx       the column, the gutter, and holding the tail while a row grows
+    messages.tsx     what the user and the model said
+    tool.tsx         one tool call, its timing, and its output
+    blocking.tsx     the two rows that stop the turn: approval and question
+  composer/          the prompt line
+    index.tsx        the draft, the @ and / triggers, send and stop
+    pickers.tsx      model, reasoning effort, fast tier, permission mode
+    context.tsx      the context meter and what fills the window
+    tokens.tsx       the @ and / suggestion list
+    shared.ts        substring ranking, and how many suggestions to show
+```
+
+The code carries no comments. Read [PLATFORM.md](../PLATFORM.md) before
+changing rendering, the request shim, or either sign-in.
