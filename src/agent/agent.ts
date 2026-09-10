@@ -16,6 +16,7 @@ import {
   findWorkspace,
   getState,
   newId,
+  removeMessage,
   sessionModel,
   setSettings,
   updateSession,
@@ -361,6 +362,31 @@ function endedInDenial(sessionId: string): boolean {
   return false
 }
 
+function failedRequest(sessionId: string): { id: string; text: string } | null {
+  const messages = findSession(getState(), sessionId)?.messages ?? []
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!
+    if (message.kind === "user") return null
+    if (message.kind !== "assistant") continue
+    const text = message.text.trim()
+    if (/ · HTTP \d{3}$/.test(text)) return { id: message.id, text }
+    const raw = /^HTTP (\d{3}): ([\s\S]*)$/.exec(text)
+    if (!raw) continue
+    let reported: unknown
+    try {
+      reported = (JSON.parse(raw[2]!) as { error?: { message?: unknown } }).error?.message
+    } catch {}
+    return {
+      id: message.id,
+      text:
+        typeof reported === "string" && reported.trim()
+          ? reported.trim()
+          : `The request failed with HTTP ${raw[1]}.`,
+    }
+  }
+  return null
+}
+
 function noticeText(reason: StopReason): string | null {
   switch (reason) {
     case "cancelled":
@@ -451,7 +477,19 @@ export async function send(
     const result = await turn.result
     runtime.turn = null
 
-    const notice = endedInDenial(sessionId) ? null : noticeText(result.stopReason)
+    const failure = result.stopReason === "refused" ? failedRequest(sessionId) : null
+    if (failure) {
+      removeMessage(sessionId, failure.id)
+      appendMessage(sessionId, {
+        id: newId(),
+        kind: "notice",
+        at: Date.now(),
+        tone: "error",
+        text: failure.text,
+      })
+    }
+
+    const notice = failure || endedInDenial(sessionId) ? null : noticeText(result.stopReason)
     if (notice) {
       appendMessage(sessionId, {
         id: newId(),

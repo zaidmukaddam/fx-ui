@@ -2114,6 +2114,39 @@ describeNative("fx app", () => {
     expect(perRequest).toEqual([14, 26])
   })
 
+  it("shows a request the provider turned down as an error, not as the model's reply", async () => {
+    const answers: [number, unknown, unknown][] = [
+      [401, { error: { message: "Invalid API key" } }, expect.stringContaining("HTTP 401")],
+      [400, { error: { message: "Codex answered HTTP 400: busy" } }, "Codex answered HTTP 400: busy"],
+    ]
+    const realFetch = globalThis.fetch
+    try {
+      for (const [status, body, shown] of answers) {
+        const workspace = createWorkspace(tempDir(), "demo")
+        const session = createSession(workspace.id)
+        openSession(session.id, 0)
+        setState((current) => ({ ...current, apiKey: "gateway-key" }))
+        globalThis.fetch = (async (input: RequestInfo | URL) => {
+          const url = String((input as Request)?.url ?? input)
+          if (!url.includes("/language-model")) return Response.json({ object: "list", data: [] })
+          return Response.json(body, { status })
+        }) as unknown as typeof fetch
+
+        await send(session.id, "hello")
+
+        const messages = messagesOf(session.id)
+        expect(messages.some((message) => message.kind === "assistant")).toBe(false)
+        expect(
+          messages.flatMap((message) =>
+            message.kind === "notice" ? [[message.tone, message.text]] : [],
+          ),
+        ).toEqual([["error", shown]])
+      }
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+
   function isNaming(init?: RequestInit): boolean {
     const body =
       typeof init?.body === "string"
