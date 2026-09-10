@@ -3381,20 +3381,24 @@ describeNative("fx app", () => {
     await app.close()
   })
 
-  it("still grows the composer when the draft wraps", async () => {
+  it("grows the composer when the draft wraps, keeping the first line off the top edge", async () => {
     const workspace = createWorkspace(tempDir(), "demo")
     openSession(createSession(workspace.id).id, 0)
     const { renderer, app } = await mount(900, 500)
 
     await app.getByTestId("composer").fill("short")
     const oneRow = await app.getByTestId("composer").bounds()
+    const oneRowCard = await app.getByTestId("composer-column").bounds()
 
     await app.getByTestId("composer").fill(`${"wrap ".repeat(60)}TAILWORD`)
     renderer.flush()
     const wrapped = await app.getByTestId("composer").bounds()
+    const wrappedCard = await app.getByTestId("composer-column").bounds()
 
     expect(wrapped.height).toBeGreaterThan(oneRow.height * 2)
     expect(renderer.getPaintedText().join(" ")).toContain("TAILWORD")
+    const shift = wrapped.y - wrappedCard.y - (oneRow.y - oneRowCard.y)
+    expect(Math.abs(shift)).toBeLessThanOrEqual(2)
 
     await app.close()
   })

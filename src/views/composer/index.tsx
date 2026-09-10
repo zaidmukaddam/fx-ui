@@ -305,7 +305,7 @@ export function Composer({
               minWidth: 0,
               fontSize: text.body,
               fontFamily: FONT,
-              marginTop: PROMPT_LIFT,
+              marginTop: oneRow ? PROMPT_LIFT : 0,
               color: color.text,
             }}
           />
