@@ -4,13 +4,28 @@ The long version of the [README](../README.md): what each feature does, and why
 it works the way it does. What the platforms underneath do that you could not
 guess is in [PLATFORM.md](../PLATFORM.md).
 
-## The agent
+## The app
 
 The agent is [`libfx`](https://fx.sh/docs/lib), running in this process as a
-native addon. The embedded fx core has no filesystem, shell or built-in tools.
-It can only do what the host hands it, so this app supplies a set of tools
-scoped to one workspace directory and puts every edit and command behind an
-approval you can see before it runs.
+native addon, and the window is drawn on the GPU by GPUI, the renderer Zed
+uses, through [GPUIX](https://gpuix.dev). The embedded fx core has no
+filesystem, shell or built-in tools. It can only do what the host hands it, so
+this app supplies a set of tools scoped to one workspace directory and puts
+every edit and command behind an approval you can see before it runs.
+
+The app is desktop-only. It needs the filesystem, a shell and the native libfx
+addon, so the browser target from the GPUIX starter was removed.
+
+A Vercel AI Gateway key can be pasted in settings, or come from the
+`AI_GATEWAY_API_KEY` environment variable. Grok and Codex sign in from settings.
+
+| Script | What it does |
+| --- | --- |
+| `bun run dev` | Start the app with hot remount |
+| `bun run build` | Compile a standalone binary into `dist/fx` |
+| `bun run test` | Drive the app through the GPU test renderer with Vitest |
+| `bun run typecheck` | `tsc --noEmit` |
+| `bun run screenshot` | Drive the real window and write a PNG |
 
 ## Features
 
@@ -188,8 +203,8 @@ and you sign in when you choose to.
 ### Images
 
 ⌘V pastes an image from the clipboard, such as a screenshot or a copied image,
-through the [patched gpuix build](../README.md#the-patched-gpuix-binary). In the
-**+** menu, *Paste image* reads the clipboard directly, which also takes an
+through the [patched gpuix build](#the-patched-gpuix-binary). In the
++ menu, *Paste image* reads the clipboard directly, which also takes an
 image file copied in Finder whatever text that copy carries. *Choose images…*
 picks them from disk, and `@screenshot.png` mentions one in the workspace.
 Clipboard text still pastes as text. Attached images sit as thumbnails above
@@ -298,6 +313,56 @@ card that is blocking the turn.
 `<markdown>`, `<code>` and `<diff>` are GPUI native elements. The syntax
 highlighting and the diff are computed in Rust, and the theme is passed to them
 as props.
+
+## State
+
+State lives in `~/.fx-ui`: `state.json` (mode 600, since it can hold an API
+key), `providers.json` and `mcp-auth.json` (also mode 600, for the OAuth tokens
+of the two subscriptions and each remote MCP server), `mcp.json` for the
+servers themselves, and one checkpoint per session. `FX_UI_HOME` moves that
+directory, which is what the tests and the screenshot script use so they never
+touch your real workspaces. While it is set, the `.claude` and `.agents` skill
+folders are looked for inside it instead of in your home folder.
+
+## The patched gpuix binary
+
+The app runs its own build of `@gpuix/native` 0.7.0 with three changes, from
+`patches/gpuix-native.diff`:
+
+- The text field draws the caret at the height of its own font instead of the
+  full 26px row, so a wrapped draft does not get a caret twice the size of its
+  text.
+- The text field binds ⌘V to its own paste and used to swallow the key even
+  when the clipboard held only an image. When there is no text to paste, the
+  key now carries on to `onKeyDown`.
+- The renderer gains `promptForPaths(elementId, multiple)`, which opens GPUI's
+  own macOS file panel and reports the chosen paths as a `change` event on that
+  element, so choosing images does not wait for `osascript` to build a panel.
+
+`vendor/gpuix-native.darwin-arm64.node` is that build, and `postinstall` copies
+it next to the package's loader, which tries that path before the published
+binary. It is built with GPUI's `runtime_shaders` because this machine's Xcode
+has no Metal toolchain, so its shaders compile when the window opens instead of
+at build time. It is linked against the macOS 26.5 SDK, like the published
+binary. macOS 27 refuses an addon linked against its own beta SDK, and the
+loader then falls back to the published binary without a word, which the ⌘V
+test is there to catch. To rebuild it:
+
+```sh
+git clone https://github.com/remorses/gpuix && cd gpuix
+git checkout @gpuix/native@0.7.0
+git submodule update --init --depth 1 zed
+git apply ../fx-ui/patches/gpuix-native.diff
+cd packages/native
+export DEVELOPER_DIR=/Library/Developer/CommandLineTools
+export SDKROOT=$DEVELOPER_DIR/SDKs/MacOSX26.5.sdk
+rustup run 1.97.1 cargo build --release --features gpui_platform/runtime_shaders
+cp target/release/libgpuix_native.dylib ../../../fx-ui/vendor/gpuix-native.darwin-arm64.node
+```
+
+Drop the feature once `xcodebuild -downloadComponent MetalToolchain` has run,
+to match the published build exactly. Upgrading gpuix means redoing this, or
+deleting all of it if upstream takes the change.
 
 ## Where the code lives
 
