@@ -19,7 +19,7 @@ import {
   notice,
   removeMessage,
   sessionModel,
-  setSettings,
+  NO_CREDENTIAL,
   updateSession,
 } from "../store"
 import {
@@ -223,9 +223,7 @@ async function runtimeFor(sessionId: string): Promise<Runtime> {
     updateSession(sessionId, (current) => ({ ...current, context: { ...current.context, used } })),
   )
   if (!back) {
-    throw new MissingApiKeyError(
-      "This session has no credential. Add an AI Gateway API key, or pick a model from a subscription you are signed in to.",
-    )
+    throw new MissingApiKeyError(NO_CREDENTIAL)
   }
 
   const existing = runtimes.get(sessionId)
@@ -411,6 +409,30 @@ export async function send(
   const trimmed = prompt.trim()
   if (!trimmed && images.length === 0) return
 
+  if (!backing(findSession(getState(), sessionId))) {
+    const isFirstTurn = !findSession(getState(), sessionId)?.messages.some(
+      (message) => message.kind === "user",
+    )
+    appendMessage(sessionId, {
+      id: newId(),
+      kind: "user",
+      at: Date.now(),
+      text: trimmed,
+      ...(images.length > 0 ? { images } : {}),
+    })
+    updateSession(sessionId, (session) => ({
+      ...session,
+      status: "error",
+      title: isFirstTurn ? fallbackTitle(trimmed) : session.title,
+    }))
+    const session = findSession(getState(), sessionId)
+    const already = session?.messages.some(
+      (message) => message.kind === "notice" && message.text === NO_CREDENTIAL,
+    )
+    if (!already) notice(sessionId, "error", NO_CREDENTIAL, "settings")
+    return
+  }
+
   const isFirstTurn = !findSession(getState(), sessionId)?.messages.some(
     (message) => message.kind === "user",
   )
@@ -485,9 +507,8 @@ export async function send(
     stream.flush()
     const message =
       error instanceof Error ? error.message : "The turn failed for an unknown reason."
-    notice(sessionId, "error", message)
+    notice(sessionId, "error", message, error instanceof MissingApiKeyError ? "settings" : undefined)
     updateSession(sessionId, (session) => ({ ...session, status: "error" }))
-    if (error instanceof MissingApiKeyError) setSettings(true)
   } finally {
     denyPendingApprovals(sessionId)
     dismissPendingQuestions(sessionId)

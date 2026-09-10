@@ -15,6 +15,7 @@ import { forgetGrants, stopBackgroundCommand } from "../../tools"
 import { attachImages, chooseImages, pasteImage } from "../../workspace/images"
 import {
   DEFAULT_MODEL,
+  canAnswer,
   sessionModel,
   updateSession,
   useApp,
@@ -75,15 +76,24 @@ const Chip = forwardRef<
 })
 
 export function ModelPicker({ session, compact }: { session: Session; compact: boolean }) {
+  const state = useApp()
+  const ready = canAnswer(state, session)
+  const implied =
+    session.model != null
+      ? {
+          id: session.model,
+          provider: session.provider,
+          name: session.modelName,
+        }
+      : ready
+        ? { id: DEFAULT_MODEL.id, provider: null, name: DEFAULT_MODEL.name }
+        : null
+
   return (
     <ModelChoice
       testId="model-picker"
-      value={keyOf({
-        id: session.model ?? DEFAULT_MODEL.id,
-        provider: session.provider,
-        name: null,
-      })}
-      label={session.modelName ?? DEFAULT_MODEL.name}
+      value={implied ? keyOf(implied) : null}
+      label={implied?.name ?? "No model"}
       maxWidth={compact ? 160 : 320}
       size={text.micro}
       onChange={(chosen) => {

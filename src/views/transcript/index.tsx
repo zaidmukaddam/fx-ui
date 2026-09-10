@@ -5,10 +5,13 @@ import { type IconName } from "../../ui/icons"
 import { color, columnFor, FONT, space, text } from "../../ui/theme"
 import { Button, Kbd, Label, Paragraph } from "../../ui/ui"
 import {
+  canAnswer,
+  setSettings,
   startSession,
   type Message,
   type Session,
   type Workspace,
+  useApp,
 } from "../../store"
 import { Approval, Question } from "./blocking"
 import { AssistantMessage, Notice, UserMessage } from "./messages"
@@ -203,8 +206,23 @@ export function Transcript({
   const copyable = copyableIds(rows, session.status === "running")
   const [heldAt, setHeldAt] = useState<number | null>(null)
   const holdTail = () => setHeldAt(rows.length)
+  const ready = canAnswer(useApp(), session)
 
   if (session.messages.length === 0) {
+    if (!ready) {
+      return (
+        <EmptyState
+          title="Nothing can answer yet"
+          description="Add an AI Gateway key, or sign in to Grok or Codex."
+          action={{
+            label: "Open settings",
+            icon: "settings",
+            onClick: () => setSettings(true),
+            testId: "empty-setup",
+          }}
+        />
+      )
+    }
     return (
       <div
         style={{

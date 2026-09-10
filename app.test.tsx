@@ -82,6 +82,7 @@ import {
 import {
   ATTACHMENT_DIR,
   DEFAULT_MODEL,
+  NO_CREDENTIAL,
   DIR,
   appendMessage,
   clearNotices,
@@ -1971,7 +1972,7 @@ describeNative("fx app", () => {
     }
   })
 
-  it("takes a notice off the transcript when it is clicked", async () => {
+  it("takes a notice off the transcript when it is dismissed", async () => {
     const workspace = createWorkspace(tempDir(), "demo")
     const session = createSession(workspace.id)
     openSession(session.id, 0)
@@ -1990,10 +1991,39 @@ describeNative("fx app", () => {
     await app.getByTestId("notice-n1").click()
     await settle()
     renderer.flush()
+    expect(messagesOf(session.id).some((message) => message.kind === "notice")).toBe(true)
+
+    await app.getByTestId("notice-dismiss-n1").click()
+    await settle()
+    renderer.flush()
 
     expect(messagesOf(session.id).some((message) => message.kind === "notice")).toBe(false)
     expect(messagesOf(session.id).some((message) => message.kind === "tool")).toBe(true)
     expect(renderer.getPaintedText().join("\n")).not.toContain("HTTP 400")
+
+    await app.close()
+  })
+
+  it("opens settings from a credential notice without dismissing it", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    appendMessage(session.id, {
+      id: "n1",
+      kind: "notice",
+      at: Date.now(),
+      tone: "error",
+      text: NO_CREDENTIAL,
+      action: "settings",
+    })
+
+    const { app } = await mount()
+    await app.getByTestId("notice-settings-n1").click()
+    await settle()
+
+    expect(getState().settingsOpen).toBe(true)
+    expect(messagesOf(session.id).some((message) => message.kind === "notice")).toBe(true)
+    expect(await app.getByTestId("settings-page").count()).toBe(1)
 
     await app.close()
   })
@@ -3415,6 +3445,13 @@ describeNative("fx app", () => {
     const { renderer, app } = await mount()
 
     expect(getState().sessions[0]?.model).toBeNull()
+    if (!process.env.AI_GATEWAY_API_KEY) {
+      expect(renderer.getPaintedText().join("\n")).toContain("No model")
+      expect(renderer.getPaintedText().join("\n")).not.toContain(DEFAULT_MODEL.name)
+      setState((current) => ({ ...current, apiKey: "vck_x" }))
+      await settle()
+      renderer.flush()
+    }
     expect(renderer.getPaintedText().join("\n")).toContain(DEFAULT_MODEL.name)
 
     await app.close()
@@ -3491,6 +3528,54 @@ describeNative("fx app", () => {
     expect(renderer.getPaintedText().join("\n")).toContain("Grok")
 
     await app.close()
+  })
+
+  it("points a new session at settings when nothing can answer", async () => {
+    if (process.env.AI_GATEWAY_API_KEY) return
+    const workspace = createWorkspace(tempDir(), "demo")
+    openSession(createSession(workspace.id).id, 0)
+    const { renderer, app } = await mount()
+
+    expect(renderer.getPaintedText().join("\n")).toContain("Nothing can answer yet")
+    await app.getByTestId("empty-setup").click()
+    await settle()
+    renderer.flush()
+    expect(await app.getByTestId("settings-page").count()).toBe(1)
+    expect(await app.getByTestId("settings-setup").count()).toBe(1)
+    expect(renderer.getPaintedText().join("\n")).toContain("esc")
+    expect(renderer.getPaintedText().join("\n")).not.toContain("⎋")
+
+    await app.getByTestId("settings-done").click()
+    await settle()
+    expect(await app.getByTestId("settings-page").count()).toBe(0)
+
+    await app.close()
+  })
+
+  it("keeps a prompt that nothing can answer, and does not hide it behind settings", async () => {
+    const key = process.env.AI_GATEWAY_API_KEY
+    delete process.env.AI_GATEWAY_API_KEY
+    try {
+      setState((current) => ({ ...current, apiKey: null, useCli: false }))
+      const workspace = createWorkspace(tempDir(), "demo")
+      const session = createSession(workspace.id)
+      openSession(session.id, 0)
+
+      await send(session.id, "hello")
+
+      const notices = messagesOf(session.id).filter((message) => message.kind === "notice")
+      expect(messagesOf(session.id).some((message) => message.kind === "user")).toBe(true)
+      expect(notices).toHaveLength(1)
+      expect(notices[0]).toMatchObject({ text: NO_CREDENTIAL, action: "settings" })
+      expect(getState().settingsOpen).toBe(false)
+      expect(findSession(getState(), session.id)?.status).toBe("error")
+
+      await send(session.id, "hello again")
+      expect(messagesOf(session.id).filter((message) => message.kind === "notice")).toHaveLength(1)
+    } finally {
+      if (key === undefined) delete process.env.AI_GATEWAY_API_KEY
+      else process.env.AI_GATEWAY_API_KEY = key
+    }
   })
 
   it("grows the composer when the draft wraps, keeping the first line off the top edge", async () => {
