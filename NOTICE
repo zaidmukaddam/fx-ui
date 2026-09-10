@@ -1,0 +1,7 @@
+fx-ui
+Copyright 2026 Zaid Mukaddam
+
+This product includes a modified build of GPUIX
+(https://github.com/remorses/gpuix), licensed under the Apache License 2.0, in
+vendor/gpuix-native.darwin-arm64.node. THIRD_PARTY_NOTICES.md lists what that
+binary contains and the licenses that apply to it.

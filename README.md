@@ -34,3 +34,9 @@ bun run build    # build a standalone binary in dist/fx
   agent's tools and the code layout.
 - [Platform notes](PLATFORM.md) record what GPUIX, libfx, Grok and Codex do that
   you could not guess from reading.
+- [Contributing](CONTRIBUTING.md) covers setup, checks and conventions.
+
+## License
+
+[Apache-2.0](LICENSE). The vendored gpuix binary's notices are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
