@@ -1793,15 +1793,18 @@ describeNative("fx app", () => {
     writeFileSync(path.join(DIR, "mcp.json"), JSON.stringify({ mcpServers: {} }))
 
     const config = path.join(DIR, "mcp.json")
-    const { renderer, app } = await mount(1280, 900)
+    const { renderer, app } = await mount(1024, 700)
+    const scrollDown = () => app.getByTestId("settings-scroll").wheel(0, -4_000)
     try {
       await app.getByTestId("open-settings").click()
       await settle()
       renderer.flush()
 
+      await scrollDown()
       await app.getByTestId("mcp-add").click()
       await settle()
       renderer.flush()
+      await scrollDown()
       await app.getByTestId("mcp-name").fill("unreachable")
       await app.getByTestId("mcp-source").fill("http://127.0.0.1:1/mcp")
       await app.getByTestId("mcp-save").click()
@@ -1812,6 +1815,7 @@ describeNative("fx app", () => {
         headers: undefined,
       })
 
+      await scrollDown()
       await app.getByTestId("mcp-remove-unreachable").click()
       await settle()
       renderer.flush()
@@ -3648,7 +3652,8 @@ describeNative("fx app", () => {
     openSession(createSession(workspace.id).id, 0)
     setSplit(true)
     openSession(createSession(workspace.id).id, 1)
-    const { renderer, app } = await mount(1280, 800)
+    const { renderer, app } = await mount(1024, 700)
+    const { width } = renderer.getWindowSize()
 
     const divider = await app.getByTestId("split-divider").bounds()
     const x = divider.x + divider.width / 2
@@ -3659,7 +3664,7 @@ describeNative("fx app", () => {
     renderer.nativeSimulateMouseMove(x - 200, y, 0)
     expect(renderer.findByType("anchored")).toEqual([])
     renderer.nativeSimulateMouseMove(x - 150, y + 200, 0)
-    expect(getState().splitRatio).toBeCloseTo((x - 150 - SIDEBAR_WIDTH) / (1280 - SIDEBAR_WIDTH), 2)
+    expect(getState().splitRatio).toBeCloseTo((x - 150 - SIDEBAR_WIDTH) / (width - SIDEBAR_WIDTH), 2)
 
     renderer.nativeSimulateMouseUp(x - 150, y + 200, 0)
     const settled = getState().splitRatio
@@ -3893,16 +3898,17 @@ describeNative("fx app", () => {
     const session = createSession(workspace.id)
     openSession(session.id, 0)
     toolRow(session.id, "row", "body")
+    setState((current) => ({ ...current, sidebarCollapsed: true }))
 
-    const { app } = await mount(1600, 800)
+    const { app } = await mount(1024, 700)
 
     const row = await app.getByTestId("tool-row").bounds()
     const composer = await app.getByTestId("composer-column").bounds()
     const pane = await app.getByTestId("pane-0").bounds()
 
+    expect(pane.width).toBeGreaterThan(CONTENT_WIDTH)
     expect(row.x).toBe(composer.x - COMPOSER_CARD_INSET)
     expect(row.x).toBe(pane.x + Math.round((pane.width - CONTENT_WIDTH) / 2))
-    expect(row.x).toBeGreaterThan(SIDEBAR_WIDTH)
 
     await app.close()
   })

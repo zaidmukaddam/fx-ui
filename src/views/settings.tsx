@@ -699,6 +699,7 @@ export function SettingsPage({
       </div>
 
       <div
+        testId="settings-scroll"
         style={{
           flexGrow: 1,
           minHeight: 0,

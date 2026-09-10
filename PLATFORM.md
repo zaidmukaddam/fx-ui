@@ -191,6 +191,24 @@ an open popover, which the live window cannot show, since clicking there hangs.
 session works where ten hang. The test renderer's clicks work fine, so drive
 interaction through `createTestRoot` and keep the live window for pixels.
 
+### A test window is never larger than the screen
+
+macOS shrinks a window that does not fit on the display, and the test
+renderer's windows are real ones. GitHub's macOS runners have a 1024 by 768
+screen, so a `createTestRoot` asked for 1280 wide gets 1024, and every
+assertion that depends on the size moves: a split-drag ratio, a centred
+column's margin, a settings row that ends up below the fold. Tests that measure
+layout ask for 1024 by 700, which fits there and behaves the same everywhere,
+and read the real size back with `getWindowSize()`.
+
+### A click outside the window lands nowhere, and says nothing
+
+`click()` on an element scrolled out of view presses at its bounds, outside the
+window, and the press is lost without an error. The next step then fails to
+find whatever the click should have opened. Scroll first. In the test renderer
+`wheel(0, -4000)` scrolls down, since the delta moves the content, and the
+offset stops at the end of the content.
+
 ### An icon is imported, not read
 
 `import icon from "./x.svg" with { type: "text" }` hands back the file's
