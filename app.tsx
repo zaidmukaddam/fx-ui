@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import { useState } from "react"
 import { motion, render, useWindowSize } from "@gpuix/react"
 import type { EventPayload } from "@gpuix/native"
@@ -523,7 +524,20 @@ const isEntryPoint =
     ? Bun.isStandaloneExecutable || Bun.main === import.meta.path
     : typeof window !== "undefined"
 
+function inheritLoginPath(): void {
+  if (process.env.TERM) return
+  const marker = "__fx_path__"
+  const { stdout } = spawnSync(
+    process.env.SHELL || "/bin/zsh",
+    ["-ilc", `printf '${marker}%s${marker}' "$PATH"`],
+    { encoding: "utf8", timeout: 5_000 },
+  )
+  const found = stdout?.split(marker)[1]
+  if (found) process.env.PATH = found
+}
+
 if (isEntryPoint) {
+  inheritLoginPath()
   void refreshCredentials()
   process.on("exit", () => {
     flushState()

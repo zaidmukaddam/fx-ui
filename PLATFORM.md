@@ -492,3 +492,24 @@ session could vanish. The store now keeps its state, its listeners and its save
 timer on `globalThis`, so every copy of the module shares one of each. Other
 module state still splits: a turn that was running keeps the copy that started
 it.
+
+## Packaging
+
+### `bun build --compile` leaves libfx's addon and wasm behind
+
+libfx finds `libfx.darwin-arm64.node` and `fx-core.wasm` through
+`new URL("./…", import.meta.url)`. In a compiled binary that URL points into
+`/$bunfs/root/`, where Bun only puts files it was told about. The window opened
+and every agent failed with `ENOENT … /$bunfs/root/fx-core.wasm`. `bun run
+build` now passes the addon and both wasm files as extra entry points with
+`--asset-naming="[name].[ext]"`, which puts them at exactly those paths. The
+gpuix addon needs none of this: its loader `require`s a literal path, which Bun
+follows.
+
+### An app opened from Finder gets launchd's `PATH`
+
+That is only `/usr/bin:/bin:/usr/sbin:/sbin`, and the shell tool's `bash -lc`
+reads bash's profile, not zsh's, so Homebrew's tools and anything an MCP server
+starts through `npx` would be missing. Outside a terminal the app asks the login
+shell for its `PATH` at startup (`$SHELL -ilc`, with a five-second limit) and
+uses that.

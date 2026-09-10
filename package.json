@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun --hot app.tsx",
-    "build": "bun build --compile app.tsx --outfile dist/fx",
+    "build": "bun build --compile --asset-naming=\"[name].[ext]\" app.tsx node_modules/libfx/libfx.darwin-arm64.node node_modules/libfx/fx-core.wasm node_modules/libfx/fx-term.wasm --outfile dist/fx",
+    "package": "bun scripts/package.ts",
     "screenshot": "bun screenshot.ts",
     "test": "FX_UI_HOME=.tmp-test-home vitest run",
     "typecheck": "tsc --noEmit",

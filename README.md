@@ -17,13 +17,14 @@ Sign in with Grok or Codex in settings, or paste a Vercel AI Gateway key there.
 ```bash
 bun run test     # run the tests
 bun run build    # build a standalone binary in dist/fx
+bun run package  # build dist/fx.app and dist/fx-<version>.dmg
 ```
 
 ## Features
 
 - Workspaces, sessions and a split view
 - Models from Grok, Codex, the AI Gateway or the fx CLI
-- An approval before every edit and command
+- Ask, Auto and Full access approval modes
 - Images, `@` file mentions and `/` skills
 - Local and remote MCP servers
 - Context and plan usage in the composer

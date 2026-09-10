@@ -10,8 +10,8 @@ The agent is [`libfx`](https://fx.sh/docs/lib), running in this process as a
 native addon, and the window is drawn on the GPU by GPUI, the renderer Zed
 uses, through [GPUIX](https://gpuix.dev). The embedded fx core has no
 filesystem, shell or built-in tools. It can only do what the host hands it, so
-this app supplies a set of tools scoped to one workspace directory and puts
-every edit and command behind an approval you can see before it runs.
+this app supplies a set of tools scoped to one workspace directory. Commands
+wait for an approval you can see before they run, and so do edits in Ask mode.
 
 The app is desktop-only. It needs the filesystem, a shell and the native libfx
 addon, so the browser target from the GPUIX starter was removed.
@@ -22,7 +22,8 @@ A Vercel AI Gateway key can be pasted in settings, or come from the
 | Script | What it does |
 | --- | --- |
 | `bun run dev` | Start the app with hot remount |
-| `bun run build` | Compile a standalone binary into `dist/fx` |
+| `bun run build` | Compile a standalone binary into `dist/fx`, with libfx's addon and wasm inside |
+| `bun run package` | Wrap that binary in `dist/fx.app` with the fx icon, and the app in a DMG |
 | `bun run test` | Drive the app through the GPU test renderer with Vitest |
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun run screenshot` | Drive the real window and write a PNG |
