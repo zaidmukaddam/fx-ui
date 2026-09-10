@@ -1,6 +1,6 @@
 const isBrowser = typeof window !== "undefined"
 
-export const FONT = isBrowser ? "Lilex" : "SF Mono"
+export const FONT = isBrowser ? "Lilex" : "Geist Mono"
 
 export const color = {
   background: "#000000",
