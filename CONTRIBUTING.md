@@ -42,6 +42,20 @@ One line: a type (`feat`, `fix`, `refactor`, `chore`, `docs` or `style`), a
 colon, then what changed, in lowercase and without a trailing period. For
 example, `fix: keep one store across hot reloads`.
 
+## Releasing
+
+Bump `version` in `package.json`, commit it, then tag and push:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The Release workflow checks that the tag matches `package.json`, runs the
+checks, builds the DMG with `bun run package` and publishes it as a GitHub
+release. The app is signed ad hoc and not notarized, so macOS asks people to
+allow it in Privacy & Security the first time they open it.
+
 ## Reporting a bug
 
 Open an issue with what you did, what you expected, and what happened. Say

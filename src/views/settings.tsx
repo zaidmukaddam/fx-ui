@@ -1,5 +1,6 @@
 import { useRef, useState } from "react"
 
+import { version } from "../../package.json"
 import { reloadSkills } from "../agent/agent"
 import { refreshCredentials, setUseCli, signOutOfProvider } from "../agent/credentials"
 import { cliSignedIn, fxStatus, fxVersion, FX_BINARY } from "../agent/cli"
@@ -643,7 +644,12 @@ export function Settings({ state }: { state: AppState }) {
       </Section>
 
       <Section title="About">
-        <Row first title="State" detail={DIR}>
+        <Row first title="Version" detail="fx-ui">
+          <Label size={text.small} color={color.ghost}>
+            {version}
+          </Label>
+        </Row>
+        <Row title="State" detail={DIR}>
           <Label size={text.small} color={color.ghost}>
             {`${state.workspaces.length} workspaces · ${state.sessions.length} sessions`}
           </Label>

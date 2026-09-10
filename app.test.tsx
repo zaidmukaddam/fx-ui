@@ -1795,6 +1795,23 @@ describeNative("fx app", () => {
     })
   })
 
+  it("shows the app version in settings", async () => {
+    const { version } = await import("./package.json")
+    const workspace = createWorkspace(tempDir(), "demo")
+    openSession(createSession(workspace.id).id, 0)
+    const { renderer, app } = await mount(1024, 700)
+    try {
+      await app.getByTestId("open-settings").click()
+      await settle()
+      renderer.flush()
+      await app.getByTestId("settings-scroll").wheel(0, -4_000)
+      renderer.flush()
+      expect(renderer.getPaintedText().join("\n")).toContain(version)
+    } finally {
+      await app.close()
+    }
+  })
+
   it("adds and removes an MCP server from settings", async () => {
     const workspace = createWorkspace(tempDir(), "demo")
     openSession(createSession(workspace.id).id, 0)
