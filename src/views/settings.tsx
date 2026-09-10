@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { Children, useRef, useState } from "react"
 
 import { version } from "../../package.json"
 import { reloadSkills } from "../agent/agent"
@@ -54,6 +54,7 @@ type Loaded = {
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const rows = Children.toArray(children)
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: space.md, minWidth: 0 }}>
       <Label size={text.micro} color={color.ghost}>
@@ -69,7 +70,14 @@ function Section({ title, children }: { title: string; children: React.ReactNode
           minWidth: 0,
         }}
       >
-        {children}
+        {rows.map((row, index) => (
+          <div
+            key={index}
+            style={index === 0 ? { minWidth: 0 } : { borderTopWidth: 1, borderColor: color.border, minWidth: 0 }}
+          >
+            {row}
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -78,35 +86,38 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Row({
   title,
   detail,
-  first,
+  danger,
   children,
+  expanded,
 }: {
   title: string
   detail: string
-  first?: boolean
+  danger?: boolean
   children?: React.ReactNode
+  expanded?: React.ReactNode
 }) {
   return (
     <div
       style={{
         display: "flex",
-        flexDirection: "row",
-        alignItems: "center",
-        gap: space.lg,
+        flexDirection: "column",
+        gap: space.md,
         padding: space.lg,
-        ...(first ? null : { borderTopWidth: 1, borderColor: color.border }),
         minWidth: 0,
       }}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 2, flexGrow: 1, minWidth: 0 }}>
-        <Label size={text.small} color={color.text}>
-          {title}
-        </Label>
-        <Paragraph size={text.micro} color={color.ghost}>
-          {detail}
-        </Paragraph>
+      <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: space.lg }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, flexGrow: 1, minWidth: 0 }}>
+          <Label size={text.small} color={color.text}>
+            {title}
+          </Label>
+          <Paragraph size={text.micro} color={danger ? color.danger : color.ghost}>
+            {detail}
+          </Paragraph>
+        </div>
+        {children}
       </div>
-      {children}
+      {expanded}
     </div>
   )
 }
@@ -128,74 +139,60 @@ function ApiKeyRow({ state }: { state: AppState }) {
   }
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: space.md,
-        padding: space.lg,
-        minWidth: 0,
-      }}
+    <Row
+      title="AI Gateway API key"
+      detail={
+        fromEnv
+          ? "Taken from AI_GATEWAY_API_KEY in the environment, which wins over a saved one."
+          : state.apiKey
+            ? `${masked(state.apiKey)} · saved in ~/.fx-ui/state.json, readable only by you.`
+            : "Needed for every model the Gateway serves. A subscription below needs no key."
+      }
+      expanded={
+        editing ? (
+          <TextField
+            testId="api-key"
+            value={draft}
+            placeholder="vck_…"
+            onChange={setDraft}
+            onSubmit={save}
+          />
+        ) : null
+      }
     >
-      <div
-        style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: space.lg }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: 2, flexGrow: 1, minWidth: 0 }}>
-          <Label size={text.small} color={color.text}>
-            AI Gateway API key
-          </Label>
-          <Paragraph size={text.micro} color={color.ghost}>
-            {fromEnv
-              ? "Taken from AI_GATEWAY_API_KEY in the environment, which wins over a saved one."
-              : state.apiKey
-                ? `${masked(state.apiKey)} · saved in ~/.fx-ui/state.json, readable only by you.`
-                : "Needed for every model the Gateway serves. A subscription below needs no key."}
-          </Paragraph>
-        </div>
-        {fromEnv ? null : editing ? (
-          <>
-            <Button label="Cancel" variant="ghost" size="sm" onClick={() => setDraft(null)} />
+      {fromEnv ? null : editing ? (
+        <>
+          <Button label="Cancel" variant="ghost" size="sm" onClick={() => setDraft(null)} />
+          <Button
+            label="Save"
+            variant="primary"
+            size="sm"
+            testId="settings-save-key"
+            onClick={save}
+            hint="↩"
+          />
+        </>
+      ) : (
+        <>
+          {state.apiKey ? (
             <Button
-              label="Save"
-              variant="primary"
+              label="Clear"
+              variant="ghost"
               size="sm"
-              testId="settings-save-key"
-              onClick={save}
-              hint="↩"
+              testId="settings-clear-key"
+              onClick={() => setState((current) => ({ ...current, apiKey: null }))}
             />
-          </>
-        ) : (
-          <>
-            {state.apiKey ? (
-              <Button
-                label="Clear"
-                variant="ghost"
-                size="sm"
-                testId="settings-clear-key"
-                onClick={() => setState((current) => ({ ...current, apiKey: null }))}
-              />
-            ) : null}
-            <Button
-              label={state.apiKey ? "Replace" : "Add"}
-              size="sm"
-              variant={state.apiKey ? "secondary" : "primary"}
-              testId="settings-api-key"
-              onClick={() => setDraft("")}
-            />
-          </>
-        )}
-      </div>
-      {editing ? (
-        <TextField
-          testId="api-key"
-          value={draft}
-          placeholder="vck_…"
-          secret
-          onChange={setDraft}
-          onSubmit={save}
-        />
-      ) : null}
-    </div>
+          ) : null}
+          <Button
+            label={state.apiKey ? "Replace" : "Add"}
+            size="sm"
+            variant={state.apiKey ? "secondary" : "primary"}
+            testId="settings-api-key"
+            onClick={() => setDraft("")}
+          />
+        </>
+      )}
+    </Row>
   )
 }
 
@@ -223,70 +220,58 @@ function AddMcpServerRow({ onChanged }: { onChanged: () => void }) {
   }
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: space.md,
-        padding: space.lg,
-        borderTopWidth: 1,
-        borderColor: color.border,
-        minWidth: 0,
-      }}
-    >
-      <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: space.lg }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 2, flexGrow: 1, minWidth: 0 }}>
-          <Label size={text.small} color={color.text}>
-            Add a server
-          </Label>
-          <Paragraph size={text.micro} color={error ? color.danger : color.ghost}>
-            {error ??
-              "A URL for a remote server, or the command that starts a local one. It connects straight away."}
-          </Paragraph>
-        </div>
-        {adding ? (
+    <Row
+      title="Add a server"
+      detail={
+        error ??
+        "A URL for a remote server, or the command that starts a local one. It connects straight away."
+      }
+      danger={Boolean(error)}
+      expanded={
+        adding ? (
           <>
-            <Button label="Cancel" variant="ghost" size="sm" onClick={cancel} />
-            <Button
-              label="Add"
-              variant="primary"
-              size="sm"
-              hint="↩"
-              testId="mcp-save"
-              onClick={save}
+            <TextField
+              testId="mcp-name"
+              value={name}
+              placeholder="linear"
+              onChange={setName}
+              onSubmit={save}
+            />
+            <TextField
+              testId="mcp-source"
+              value={source}
+              placeholder="https://mcp.linear.app/mcp or npx -y some-server"
+              onChange={setSource}
+              onSubmit={save}
             />
           </>
-        ) : (
-          <Button
-            label="Add"
-            size="sm"
-            testId="mcp-add"
-            onClick={() => {
-              setName("")
-              setError(null)
-            }}
-          />
-        )}
-      </div>
+        ) : null
+      }
+    >
       {adding ? (
         <>
-          <TextField
-            testId="mcp-name"
-            value={name}
-            placeholder="linear"
-            onChange={setName}
-            onSubmit={save}
-          />
-          <TextField
-            testId="mcp-source"
-            value={source}
-            placeholder="https://mcp.linear.app/mcp or npx -y some-server"
-            onChange={setSource}
-            onSubmit={save}
+          <Button label="Cancel" variant="ghost" size="sm" onClick={cancel} />
+          <Button
+            label="Add"
+            variant="primary"
+            size="sm"
+            hint="↩"
+            testId="mcp-save"
+            onClick={save}
           />
         </>
-      ) : null}
-    </div>
+      ) : (
+        <Button
+          label="Add"
+          size="sm"
+          testId="mcp-add"
+          onClick={() => {
+            setName("")
+            setError(null)
+          }}
+        />
+      )}
+    </Row>
   )
 }
 
@@ -363,13 +348,11 @@ function ProviderRow({
   account,
   provider,
   viaCli,
-  first,
   onChanged,
 }: {
   account: Account | undefined
   viaCli: boolean
   provider: ProviderId
-  first?: boolean
   onChanged: () => void
 }) {
   const spec = PROVIDERS[provider]
@@ -415,85 +398,69 @@ function ProviderRow({
         : `Run turns on your ${spec.label} subscription instead of the Gateway key.`
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: space.md,
-        padding: space.lg,
-        ...(first ? null : { borderTopWidth: 1, borderColor: color.border }),
-        minWidth: 0,
-      }}
+    <Row
+      title={spec.label}
+      detail={error ?? detail}
+      danger={Boolean(error)}
+      expanded={
+        pending ? (
+          <TextField
+            testId={`code-${provider}`}
+            value={code}
+            placeholder="Paste the code the browser showed"
+            onChange={setCode}
+            onSubmit={paste}
+          />
+        ) : null
+      }
     >
-      <div
-        style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: space.lg }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: 2, flexGrow: 1, minWidth: 0 }}>
-          <Label size={text.small} color={color.text}>
-            {spec.label}
-          </Label>
-          <Paragraph size={text.micro} color={error ? color.danger : color.ghost}>
-            {error ?? detail}
-          </Paragraph>
-        </div>
-        {pending ? (
-          <>
-            <Button
-              label="Cancel"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                pending.cancel()
-                setPending(null)
-                setCode("")
-              }}
-            />
-            <Button
-              label="Finish"
-              variant="primary"
-              size="sm"
-              disabled={!code.trim()}
-              testId={`settings-paste-${provider}`}
-              onClick={paste}
-              hint="↩"
-            />
-          </>
-        ) : account ? (
+      {pending ? (
+        <>
           <Button
-            label="Sign out"
+            label="Cancel"
+            variant="ghost"
             size="sm"
-            testId={`settings-signout-${provider}`}
             onClick={() => {
-              signOutOfProvider(provider)
-              onChanged()
+              pending.cancel()
+              setPending(null)
+              setCode("")
             }}
           />
-        ) : (
           <Button
-            label="Sign in"
-            size="sm"
+            label="Finish"
             variant="primary"
-            testId={`settings-signin-${provider}`}
-            onClick={() => void start()}
+            size="sm"
+            disabled={!code.trim()}
+            testId={`settings-paste-${provider}`}
+            onClick={paste}
+            hint="↩"
           />
-        )}
-      </div>
-      {pending ? (
-        <TextField
-          testId={`code-${provider}`}
-          value={code}
-          placeholder="Paste the code the browser showed"
-          onChange={setCode}
-          onSubmit={paste}
+        </>
+      ) : account ? (
+        <Button
+          label="Sign out"
+          size="sm"
+          testId={`settings-signout-${provider}`}
+          onClick={() => {
+            signOutOfProvider(provider)
+            onChanged()
+          }}
         />
-      ) : null}
-    </div>
+      ) : (
+        <Button
+          label="Sign in"
+          size="sm"
+          variant="primary"
+          testId={`settings-signin-${provider}`}
+          onClick={() => void start()}
+        />
+      )}
+    </Row>
   )
 }
 
 export function Settings({ state }: { state: AppState }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
-  const [revision, setRevision] = useState(0)
 
   const focused = state.panes[state.focusedPane]?.sessionId ?? null
   const workspace = findWorkspace(state, findSession(state, focused)?.workspaceId ?? null)
@@ -525,15 +492,11 @@ export function Settings({ state }: { state: AppState }) {
     }
   })
 
-  const changed = () => {
-    setRevision((n) => n + 1)
-    reload()
-  }
+  const changed = reload
 
   return (
     <div
       testId="settings"
-      key={revision}
       style={{
         display: "flex",
         flexDirection: "column",
@@ -575,7 +538,6 @@ export function Settings({ state }: { state: AppState }) {
 
       <Section title="Runtime">
         <Row
-          first
           title="Run through the fx CLI"
           detail={
             state.useCli
@@ -591,7 +553,7 @@ export function Settings({ state }: { state: AppState }) {
             label={state.useCli ? "Turn off" : "Turn on"}
             size="sm"
             testId="settings-use-cli"
-            onClick={() => void setUseCli(!state.useCli).then(() => setRevision((n) => n + 1))}
+            onClick={() => void setUseCli(!state.useCli).then(reload)}
           />
         </Row>
         <Row
@@ -606,7 +568,6 @@ export function Settings({ state }: { state: AppState }) {
 
       <Section title="Extensions">
         <Row
-          first
           title="Skills"
           detail={
             !loaded
@@ -644,7 +605,7 @@ export function Settings({ state }: { state: AppState }) {
       </Section>
 
       <Section title="About">
-        <Row first title="Version" detail="fx-ui">
+        <Row title="Version" detail="fx-ui">
           <Label size={text.small} color={color.ghost}>
             {version}
           </Label>

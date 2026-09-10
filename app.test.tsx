@@ -60,9 +60,9 @@ import {
   listProviderModels,
   parseCatalogue,
   providerFetch,
-  toResponsesRequest,
   type SearchStep,
 } from "./src/agent/providers"
+import { toResponsesRequest } from "./src/agent/responses"
 import { CONTENT_WIDTH, TITLEBAR_CENTER } from "./src/ui/theme"
 import {
   createTools,
@@ -901,6 +901,58 @@ function reply(id, result) {
         { signal: new AbortController().signal },
       )
       expect(JSON.stringify(result)).toContain("echoed hi")
+    } finally {
+      await loaded.close()
+    }
+  })
+
+  it("cancels an in-flight stdio tool call without leaving it pending", async () => {
+    const root = tempDir()
+    const server = path.join(root, "server.mjs")
+    writeFileSync(
+      server,
+      `let buffer = ""
+process.stdin.setEncoding("utf8")
+process.stdin.on("data", (chunk) => {
+  buffer += chunk
+  let at
+  while ((at = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, at).trim()
+    buffer = buffer.slice(at + 1)
+    if (!line) continue
+    const message = JSON.parse(line)
+    if (message.method === "initialize") {
+      reply(message.id, { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "demo", version: "1" } })
+    } else if (message.method === "tools/list") {
+      reply(message.id, { tools: [{ name: "slow", description: "Wait, then echo.", inputSchema: { type: "object", properties: { value: { type: "string" } } } }] })
+    } else if (message.method === "tools/call") {
+      setTimeout(() => reply(message.id, { content: [{ type: "text", text: "echoed " + message.params.arguments.value }] }), 200)
+    }
+  }
+})
+function reply(id, result) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n")
+}
+`,
+    )
+    const file = path.join(root, "mcp.json")
+    writeFileSync(
+      file,
+      JSON.stringify({ mcpServers: { demo: { command: process.execPath, args: [server] } } }),
+    )
+
+    const loaded = await loadMcp(file)
+    try {
+      const slow = loaded.tools.find((entry) => entry.tool.name.includes("slow"))?.tool
+      expect(slow).toBeDefined()
+
+      const controller = new AbortController()
+      const cancelled = slow!.execute({ value: "hi" }, { signal: controller.signal })
+      setTimeout(() => controller.abort(), 20)
+      await expect(cancelled).rejects.toThrow(/cancelled/)
+
+      const again = await slow!.execute({ value: "again" }, { signal: new AbortController().signal })
+      expect(JSON.stringify(again)).toContain("echoed again")
     } finally {
       await loaded.close()
     }
@@ -2206,7 +2258,7 @@ describeNative("fx app", () => {
     await app.getByTestId("confirm-rename-session").click()
 
     expect(findSession(getState(), session.id)?.title).toBe("Tokenizer work")
-    expect(getState().dialog).toBeNull()
+    expect(getState().overlay).toBeNull()
     await app.close()
   })
 
@@ -2381,7 +2433,7 @@ describeNative("fx app", () => {
     await settle()
 
     expect(getState().apiKey).toBe("vck_from_settings")
-    expect(getState().dialog).toBeNull()
+    expect(getState().overlay).toBeNull()
 
     openSession(createSession(workspace.id).id, 0)
     await settle()
@@ -3954,7 +4006,7 @@ describeNative("fx app", () => {
 
     await app.getByTestId("command-toggle-split").click()
     expect(getState().panes).toHaveLength(2)
-    expect(getState().paletteOpen).toBe(false)
+    expect(getState().overlay).toBeNull()
 
     await app.close()
   })

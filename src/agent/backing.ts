@@ -28,7 +28,7 @@ export function backing(
   const state = getState()
   if (!session) return null
 
-  const provider = session.provider ?? null
+  const provider = session.provider
   if (!state.apiKey && !state.useCli && !provider) return null
 
   const search = nativeSearch(state, session)
@@ -40,8 +40,8 @@ export function backing(
       apiKey: state.apiKey ?? UNUSED_KEY,
       fetch: providerFetch(globalThis.fetch, {
         provider,
-        effort: session.effort ?? null,
-        fast: session.fast ?? false,
+        effort: session.effort,
+        fast: session.fast,
         search,
         onSearch,
         onUsage,

@@ -77,10 +77,10 @@ export type Session = {
   createdAt: number
   updatedAt: number
   model: string | null
-  modelName?: string | null
-  provider?: "grok" | "codex" | null
-  effort?: string | null
-  fast?: boolean
+  modelName: string | null
+  provider: "grok" | "codex" | null
+  effort: string | null
+  fast: boolean
   mode: PermissionMode
   status: "idle" | "running" | "error"
   messages: Message[]
@@ -134,6 +134,8 @@ export type Dialog =
   | { kind: "remove-workspace"; workspaceId: string }
   | { kind: "rename-session"; sessionId: string; value: string }
 
+export type Overlay = { kind: "palette" } | Dialog
+
 export type AppState = {
   workspaces: Workspace[]
   sessions: Session[]
@@ -151,9 +153,8 @@ export type AppState = {
   attachments: Record<string, string[]>
   git: Record<string, GitStatus | null>
   limits: Record<string, PlanLimits>
-  paletteOpen: boolean
   settingsOpen: boolean
-  dialog: Dialog | null
+  overlay: Overlay | null
 }
 
 function home(): string {
@@ -205,11 +206,29 @@ function emptyState(): AppState {
     attachments: {},
     git: {},
     limits: {},
-    paletteOpen: false,
     settingsOpen: false,
-    dialog: null,
+    overlay: null,
   }
 }
+
+const PERSISTED = [
+  "workspaces",
+  "sessions",
+  "activeWorkspaceId",
+  "panes",
+  "focusedPane",
+  "splitRatio",
+  "sidebarCollapsed",
+  "apiKey",
+  "useCli",
+  "models",
+  "defaultModel",
+] as const satisfies readonly (keyof AppState)[]
+
+const persisted = (source: Partial<AppState>): Partial<AppState> =>
+  Object.fromEntries(
+    PERSISTED.filter((key) => key in source).map((key) => [key, source[key]]),
+  ) as Partial<AppState>
 
 function load(): AppState {
   const base = emptyState()
@@ -224,6 +243,10 @@ function load(): AppState {
     status: "idle" as const,
     context: { ...EMPTY_CONTEXT, ...session.context },
     grants: session.grants ?? [],
+    modelName: session.modelName ?? null,
+    provider: session.provider ?? null,
+    effort: session.effort ?? null,
+    fast: session.fast ?? false,
     messages: (session.messages ?? []).map((message) =>
       message.kind === "approval" && message.decision === "pending"
         ? { ...message, decision: "denied" as const }
@@ -234,19 +257,9 @@ function load(): AppState {
   }))
   return {
     ...base,
-    ...saved,
+    ...persisted(saved),
     sessions,
     apiKey: process.env.AI_GATEWAY_API_KEY ?? saved.apiKey ?? null,
-    accounts: [],
-    models: saved.models ?? [],
-    defaultModel: saved.defaultModel ?? null,
-    background: {},
-    attachments: {},
-    git: {},
-    limits: {},
-    paletteOpen: false,
-    settingsOpen: false,
-    dialog: null,
   }
 }
 
@@ -265,20 +278,12 @@ const shared: Shared = ((globalThis as { fxUiStore?: Shared }).fxUiStore ??= {
 function persistNow(): void {
   const { state } = shared
   const snapshot = {
-    workspaces: state.workspaces,
+    ...persisted(state),
     sessions: state.sessions.map((session) => ({
       ...session,
       messages: session.messages.slice(-MAX_PERSISTED_MESSAGES),
     })),
-    activeWorkspaceId: state.activeWorkspaceId,
-    panes: state.panes,
-    focusedPane: state.focusedPane,
-    splitRatio: state.splitRatio,
-    sidebarCollapsed: state.sidebarCollapsed,
     apiKey: process.env.AI_GATEWAY_API_KEY ? null : state.apiKey,
-    useCli: state.useCli,
-    models: state.models,
-    defaultModel: state.defaultModel,
   }
   try {
     mkdirSync(DIR, { recursive: true })
@@ -352,6 +357,10 @@ export function appendMessage(sessionId: string, message: Message): void {
     updatedAt: Date.now(),
     messages: [...session.messages, message],
   }))
+}
+
+export function notice(sessionId: string, tone: "info" | "error", text: string): void {
+  appendMessage(sessionId, { id: newId(), kind: "notice", at: Date.now(), tone, text })
 }
 
 export function removeMessage(sessionId: string, messageId: string): void {
@@ -473,27 +482,6 @@ function startsOn(current: AppState, workspaceId: string): StartsOn {
   }
 }
 
-export function createSession(workspaceId: string): Session {
-  const session: Session = {
-    id: newId(),
-    workspaceId,
-    title: "New session",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    ...startsOn(getState(), workspaceId),
-    status: "idle",
-    messages: [],
-    context: { ...EMPTY_CONTEXT },
-    grants: [],
-  }
-  setState((current) => ({
-    ...current,
-    sessions: [session, ...current.sessions],
-    activeWorkspaceId: workspaceId,
-  }))
-  return session
-}
-
 function dropUnsent(current: AppState): AppState {
   const open = new Set(current.panes.map((pane) => pane.sessionId))
   const sessions = current.sessions.filter(
@@ -504,6 +492,51 @@ function dropUnsent(current: AppState): AppState {
   return sessions.length === current.sessions.length
     ? current
     : { ...current, sessions }
+}
+
+function newSession(current: AppState, workspaceId: string): Session {
+  return {
+    id: newId(),
+    workspaceId,
+    title: "New session",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    ...startsOn(current, workspaceId),
+    status: "idle",
+    messages: [],
+    context: { ...EMPTY_CONTEXT },
+    grants: [],
+  }
+}
+
+export function createSession(workspaceId: string): Session {
+  let created!: Session
+  setState((current) => {
+    created = newSession(current, workspaceId)
+    return {
+      ...current,
+      sessions: [created, ...current.sessions],
+      activeWorkspaceId: workspaceId,
+    }
+  })
+  return created
+}
+
+export function startSession(workspaceId: string, pane?: number): Session {
+  let created!: Session
+  setState((current) => {
+    created = newSession(current, workspaceId)
+    const index = pane ?? current.focusedPane
+    return dropUnsent({
+      ...current,
+      sessions: [created, ...current.sessions],
+      activeWorkspaceId: workspaceId,
+      focusedPane: index,
+      panes: current.panes.map((p, i) => (i === index ? { sessionId: created.id } : p)),
+      settingsOpen: false,
+    })
+  })
+  return created
 }
 
 export function openSession(sessionId: string, pane?: number): void {
@@ -573,16 +606,24 @@ export function setSplit(open: boolean): void {
   })
 }
 
+export function setOverlay(overlay: Overlay | null): void {
+  setState((current) => ({ ...current, overlay }))
+}
+
 export function setDialog(dialog: Dialog | null): void {
-  setState((current) => ({ ...current, dialog, paletteOpen: false }))
+  setOverlay(dialog)
 }
 
 export function setPalette(open: boolean): void {
-  setState((current) => ({ ...current, paletteOpen: open, dialog: null }))
+  setOverlay(open ? { kind: "palette" } : null)
 }
 
 export function setSettings(open: boolean): void {
-  setState((current) => ({ ...current, settingsOpen: open, paletteOpen: false }))
+  setState((current) => ({
+    ...current,
+    settingsOpen: open,
+    overlay: current.overlay?.kind === "palette" ? null : current.overlay,
+  }))
 }
 
 export function setBackground(sessionId: string, running: BackgroundCommand[]): void {
@@ -621,52 +662,6 @@ export function nativeSearch(current: AppState, session: Session | null): boolea
 export function apiKeySource(current: AppState): "env" | "saved" | "none" {
   if (process.env.AI_GATEWAY_API_KEY) return "env"
   return current.apiKey ? "saved" : "none"
-}
-
-export function credential(current: AppState): {
-  label: string
-  detail: string[]
-  ready: boolean
-} {
-  const names = current.accounts.map((entry) =>
-    entry.provider === "grok" ? "Grok" : "Codex",
-  )
-  const key = apiKeySource(current)
-  if (names.length > 0) {
-    return {
-      label: names.join(" · "),
-      detail: [
-        `Signed in to ${names.join(" and ")}`,
-        key === "none"
-          ? "Turns run on the subscription. Gateway models need a key as well."
-          : "Every model is available: the subscription's, and the Gateway's on your key.",
-        "Click for settings.",
-      ],
-      ready: true,
-    }
-  }
-  if (key === "none") {
-    return {
-      label: "No models",
-      detail: [
-        "Nothing can answer a prompt yet",
-        "Add an AI Gateway key, or sign in to a Grok or Codex subscription.",
-        "Click for settings.",
-      ],
-      ready: false,
-    }
-  }
-  return {
-    label: "AI Gateway",
-    detail: [
-      "Connected through the AI Gateway",
-      key === "env"
-        ? "The key comes from AI_GATEWAY_API_KEY, which overrides any key saved here."
-        : "The key is saved in ~/.fx-ui/state.json, readable only by you.",
-      "Click for settings.",
-    ],
-    ready: true,
-  }
 }
 
 export function resetState(): void {

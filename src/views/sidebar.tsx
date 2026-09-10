@@ -12,13 +12,13 @@ import {
 } from "../ui/theme"
 import { Button, Explain, IconButton, Label } from "../ui/ui"
 import {
-  credential,
-  createSession,
+  apiKeySource,
   openSession,
   setDialog,
   setPalette,
   setSettings,
   setState,
+  startSession,
   type AppState,
   type Session,
   type Workspace,
@@ -37,6 +37,52 @@ function ago(at: number): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
   if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`
   return `${Math.floor(seconds / 86_400)}d`
+}
+
+function credentialStatus(current: AppState): {
+  label: string
+  detail: string[]
+  ready: boolean
+} {
+  const names = current.accounts.map((entry) =>
+    entry.provider === "grok" ? "Grok" : "Codex",
+  )
+  const key = apiKeySource(current)
+  if (names.length > 0) {
+    return {
+      label: names.join(" · "),
+      detail: [
+        `Signed in to ${names.join(" and ")}`,
+        key === "none"
+          ? "Turns run on the subscription. Gateway models need a key as well."
+          : "Every model is available: the subscription's, and the Gateway's on your key.",
+        "Click for settings.",
+      ],
+      ready: true,
+    }
+  }
+  if (key === "none") {
+    return {
+      label: "No models",
+      detail: [
+        "Nothing can answer a prompt yet",
+        "Add an AI Gateway key, or sign in to a Grok or Codex subscription.",
+        "Click for settings.",
+      ],
+      ready: false,
+    }
+  }
+  return {
+    label: "AI Gateway",
+    detail: [
+      "Connected through the AI Gateway",
+      key === "env"
+        ? "The key comes from AI_GATEWAY_API_KEY, which overrides any key saved here."
+        : "The key is saved in ~/.fx-ui/state.json, readable only by you.",
+      "Click for settings.",
+    ],
+    ready: true,
+  }
 }
 
 function WorkspaceRow({
@@ -241,9 +287,9 @@ export function Sidebar({ state }: { state: AppState }) {
   const paneOf = (sessionId: string) =>
     state.panes.findIndex((pane) => pane.sessionId === sessionId)
   const splitOpen = state.panes.length > 1
-  const status = credential(state)
+  const status = credentialStatus(state)
 
-  const newSession = (workspaceId: string) => openSession(createSession(workspaceId).id)
+  const newSession = (workspaceId: string) => startSession(workspaceId)
 
   return (
     <div

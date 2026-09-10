@@ -1,10 +1,11 @@
 import { memo, useState } from "react"
+import { motion } from "@gpuix/react"
 
+import { type IconName } from "../../ui/icons"
 import { color, columnFor, FONT, space, text } from "../../ui/theme"
-import { EmptyState, FX_MARK } from "../../ui/ui"
+import { Button, Kbd, Label, Paragraph } from "../../ui/ui"
 import {
-  createSession,
-  openSession,
+  startSession,
   type Message,
   type Session,
   type Workspace,
@@ -15,6 +16,126 @@ import { ColumnWidth, HoldTail } from "./shared"
 import { ToolResult } from "./tool"
 
 const SCROLL_FADE_HEIGHT = 32
+
+const FX_MARK = [
+  " ⠀⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀⠀",
+  " ⠀⠀⠀⠀⠀⢰⣿⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+  " ⠀⠀⠀⣠⣶⣿⣿⣷⣶⡶⣶⣶⣆⠀⠀⠀⣴⣶⣶⠆",
+  " ⠀⠀⠀⠉⢹⣿⣿⠉⠉⠀⠘⢿⣿⣧⣀⣾⣿⡿⠃⠀",
+  " ⠀⠀⠀⠀⣼⣿⡏⠀⠀⠀⠀⠀⠻⣿⣿⣿⠟⠀⠀⠀",
+  " ⠀⠀⠀⢀⣿⣿⠃⠀⠀⠀⠀⢠⣦⠘⢿⣿⣷⡀⠀⠀",
+  " ⠀⠀⠀⣸⣿⡟⠀⠀⠀⠀⣰⣿⣿⠗⠀⠻⣿⣿⣄⠀",
+  " ⠀⠀⠀⣿⣿⠇⠀⠀⠀⠾⠿⠿⠋⠀⠀⠀⠘⠿⠿⠦",
+  "  ⠀⣸⣿⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+  " ⣿⣿⣿⠟⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+].join("\n")
+
+function Mark({ testId }: { testId?: string }) {
+  return (
+    <text
+      testId={testId}
+      style={{
+        fontSize: text.small,
+        fontFamily: FONT,
+        lineHeight: Math.round(text.small * 1.05),
+        color: color.faint,
+        whiteSpace: "nowrap",
+        userSelect: "none",
+      }}
+    >
+      {FX_MARK}
+    </text>
+  )
+}
+
+function EmptyState({
+  title,
+  description,
+  action,
+  hints,
+}: {
+  title: string
+  description: string
+  action?: { label: string; icon?: IconName; onClick: () => void; testId?: string }
+  hints?: { keys: string; label: string }[]
+}) {
+  return (
+    <div
+      style={{
+        flexGrow: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: space.lg,
+        paddingLeft: space.xxl,
+        paddingRight: space.xxl,
+      }}
+    >
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.3, ease: "easeOut" }}
+      >
+        <Mark testId="empty-art" />
+      </motion.div>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: space.sm,
+          maxWidth: 460,
+        }}
+      >
+        <Label size={text.title} color={color.text}>
+          {title}
+        </Label>
+        <Paragraph align="center" color={color.faint}>
+          {description}
+        </Paragraph>
+      </div>
+      {action ? (
+        <Button
+          label={action.label}
+          icon={action.icon}
+          onClick={action.onClick}
+          testId={action.testId}
+          variant="secondary"
+        />
+      ) : null}
+      {hints && hints.length > 0 ? (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: space.lg,
+            paddingTop: space.sm,
+          }}
+        >
+          {hints.map((hint) => (
+            <div
+              key={hint.keys}
+              style={{
+                display: "flex",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: space.sm,
+              }}
+            >
+              <Kbd keys={hint.keys} />
+              <Label size={text.micro} color={color.ghost}>
+                {hint.label}
+              </Label>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
 
 function hasRow(message: Message): boolean {
   return !(
@@ -32,12 +153,17 @@ function gapBefore(message: Message, previous: Message | undefined): number {
   return dense ? space.xs : space.xl
 }
 
-function endsTurn(rows: Message[], index: number, running: boolean): boolean {
-  for (const next of rows.slice(index + 1)) {
-    if (next.kind === "user") return true
-    if (next.kind !== "notice") return false
+function copyableIds(rows: Message[], running: boolean): Set<string> {
+  const ids = new Set<string>()
+  let after: Message["kind"] | null = null
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]!
+    if (row.kind === "assistant" && (after === "user" || (after === null && !running))) {
+      ids.add(row.id)
+    }
+    if (row.kind !== "notice") after = row.kind
   }
-  return !running
+  return ids
 }
 
 const MessageRow = memo(function MessageRow({
@@ -74,6 +200,7 @@ export function Transcript({
 }) {
   const { column, gutter } = columnFor(paneWidth)
   const rows = session.messages.filter(hasRow)
+  const copyable = copyableIds(rows, session.status === "running")
   const [heldAt, setHeldAt] = useState<number | null>(null)
   const holdTail = () => setHeldAt(rows.length)
 
@@ -88,19 +215,7 @@ export function Transcript({
           justifyContent: "center",
         }}
       >
-        <text
-          testId="session-art"
-          style={{
-            fontSize: text.small,
-            fontFamily: FONT,
-            lineHeight: Math.round(text.small * 1.05),
-            color: color.faint,
-            whiteSpace: "nowrap",
-            userSelect: "none",
-          }}
-        >
-          {FX_MARK}
-        </text>
+        <Mark testId="session-art" />
       </div>
     )
   }
@@ -142,10 +257,7 @@ export function Transcript({
             <MessageRow
               sessionId={session.id}
               message={message}
-              copyable={
-                message.kind === "assistant" &&
-                endsTurn(rows, index, session.status === "running")
-              }
+              copyable={copyable.has(message.id)}
             />
           </div>
         ))}
@@ -202,8 +314,6 @@ export function NoSession({
   if (!workspace) {
     return (
       <EmptyState
-        icon="folderPlus"
-        art={FX_MARK}
         title="Add a workspace"
         description="A workspace is the directory the agent works in. Everything it reads, edits, and runs stays inside it."
         action={{
@@ -221,14 +331,12 @@ export function NoSession({
   }
   return (
     <EmptyState
-      icon="message"
-      art={FX_MARK}
       title="No session open"
       description={`Start a conversation in ${workspace.name}. Type @ to attach a file, / to run a skill.`}
       action={{
         label: "New session",
         icon: "plus",
-        onClick: () => openSession(createSession(workspace.id).id),
+        onClick: () => startSession(workspace.id),
         testId: "empty-new-session",
       }}
       hints={[

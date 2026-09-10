@@ -1,10 +1,11 @@
-import { createMcpAdapter, type McpClient } from "libfx/mcp"
+import { createMcpAdapter } from "libfx/mcp"
 
 import type { HostTool } from "../../tools"
 import { authorisedServers } from "./auth"
 import { MCP_CONFIG_FILE, isRemote, readMcpConfig, type ServerConfig } from "./config"
-import { HttpClient, NeedsSignIn } from "./http"
-import { StdioClient } from "./stdio"
+import { HttpWire, NeedsSignIn } from "./http"
+import { McpSession } from "./session"
+import { StdioWire } from "./stdio"
 
 export {
   MCP_CONFIG_FILE,
@@ -44,13 +45,8 @@ const EMPTY: LoadedMcp = {
   close: async () => {},
 }
 
-type Transport = McpClient & {
-  initialize(): Promise<void>
-  close(): Promise<void>
-}
-
-function clientFor(name: string, config: ServerConfig): Transport {
-  return isRemote(config) ? new HttpClient(name, config) : new StdioClient(name, config)
+function clientFor(name: string, config: ServerConfig): McpSession {
+  return new McpSession(name, isRemote(config) ? new HttpWire(name, config) : new StdioWire(name, config))
 }
 
 export async function loadMcp(file = MCP_CONFIG_FILE): Promise<LoadedMcp> {
@@ -66,7 +62,7 @@ export async function loadMcp(file = MCP_CONFIG_FILE): Promise<LoadedMcp> {
 
   await Promise.all(
     names.map(async (name) => {
-      let client: Transport | null = null
+      let client: McpSession | null = null
       try {
         client = clientFor(name, config[name]!)
         await client.initialize()
@@ -108,20 +104,19 @@ export type McpLease = Omit<LoadedMcp, "close"> & {
   release(): Promise<void>
 }
 
-type Pool = { loaded: Promise<LoadedMcp>; leases: number }
+type Pool = { loaded: Promise<LoadedMcp>; leases: number; live: LoadedMcp | null }
 
 let pool: Pool | null = null
-let settled: LoadedMcp | null = null
 
 export async function acquireMcp(file = MCP_CONFIG_FILE): Promise<McpLease> {
-  if (!pool) pool = { loaded: loadMcp(file), leases: 0 }
+  if (!pool) pool = { loaded: loadMcp(file), leases: 0, live: null }
   const current = pool
   current.leases += 1
 
   let loaded: LoadedMcp
   try {
     loaded = await current.loaded
-    settled = loaded
+    if (pool === current) current.live = loaded
   } catch (error) {
     current.leases -= 1
     throw error
@@ -139,7 +134,6 @@ export async function acquireMcp(file = MCP_CONFIG_FILE): Promise<McpLease> {
       current.leases -= 1
       if (current.leases <= 0 && pool === current) {
         pool = null
-        settled = null
         await loaded.close()
       }
     },
@@ -147,8 +141,7 @@ export async function acquireMcp(file = MCP_CONFIG_FILE): Promise<McpLease> {
 }
 
 export function listMcpTools(): HostTool[] {
-  if (!pool || !settled) return []
-  return settled.tools.map((entry) => entry.tool)
+  return (pool?.live?.tools ?? []).map((entry) => entry.tool)
 }
 
 export function listMcpServers(file = MCP_CONFIG_FILE): {
@@ -160,7 +153,7 @@ export function listMcpServers(file = MCP_CONFIG_FILE): {
 }[] {
   const config = readMcpConfig(file)
   const authorised = new Set(authorisedServers())
-  const live = settled
+  const live = pool?.live
   return Object.entries(config).map(([name, entry]) => {
     const toolNames = (live?.tools ?? [])
       .filter((tool) => tool.server === name)
@@ -178,7 +171,6 @@ export function listMcpServers(file = MCP_CONFIG_FILE): {
 export async function resetMcp(): Promise<void> {
   const current = pool
   pool = null
-  settled = null
   if (!current) return
   try {
     await (await current.loaded).close()

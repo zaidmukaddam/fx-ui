@@ -1,5 +1,6 @@
-import { useRef, useState } from "react"
-import { useGpuix, type PublicInstance } from "@gpuix/react"
+import { forwardRef, useRef, useState } from "react"
+import { motion, useGpuix, type MotionTransition, type PublicInstance } from "@gpuix/react"
+import type { EventPayload } from "@gpuix/native"
 import {
   Select,
   SelectContent,
@@ -9,7 +10,7 @@ import {
 
 import { Icon } from "../../ui/icons"
 import { color, radius, space, text } from "../../ui/theme"
-import { Button, EffortDial, Explain, Label, overlayStyle } from "../../ui/ui"
+import { Button, Explain, Label, overlayStyle } from "../../ui/ui"
 import { forgetGrants, stopBackgroundCommand } from "../../tools"
 import { attachImages, chooseImages, pasteImage } from "../../workspace/images"
 import {
@@ -34,13 +35,52 @@ const MODES: { value: PermissionMode; label: string; hint: string }[] = [
   },
 ]
 
+const Chip = forwardRef<
+  PublicInstance,
+  {
+    testId?: string
+    active?: boolean
+    width?: number
+    justify?: "flex-start" | "center"
+    onClick?: () => void
+    children: React.ReactNode
+  }
+>(function Chip({ testId, active, width, justify = "flex-start", onClick, children }, ref) {
+  return (
+    <div
+      ref={ref}
+      testId={testId}
+      onClick={onClick}
+      style={{
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: justify,
+        gap: space.sm,
+        height: 24,
+        flexShrink: 0,
+        ...(width ? { width } : null),
+        paddingLeft: space.sm,
+        paddingRight: space.sm,
+        borderRadius: radius.sm,
+        cursor: "pointer",
+        userSelect: "none",
+        backgroundColor: active ? color.selected : undefined,
+        hover: { backgroundColor: active ? color.selected : color.hover },
+      }}
+    >
+      {children}
+    </div>
+  )
+})
+
 export function ModelPicker({ session, compact }: { session: Session; compact: boolean }) {
   return (
     <ModelChoice
       testId="model-picker"
       value={keyOf({
         id: session.model ?? DEFAULT_MODEL.id,
-        provider: session.provider ?? null,
+        provider: session.provider,
         name: null,
       })}
       label={session.modelName ?? DEFAULT_MODEL.name}
@@ -67,40 +107,202 @@ function effortTriggerWidth(options: string[]): number {
 export function FastToggle({ session }: { session: Session }) {
   const tier = sessionModel(useApp(), session)?.fast
   if (!tier) return null
-  const on = session.fast ?? false
+  const on = session.fast
 
   return (
     <Explain lines={[tier.label, tier.detail, "Changing it restarts the conversation."]}>
-      <div
+      <Chip
         testId="fast-toggle"
-        onClick={() =>
-          updateSession(session.id, (current) => ({ ...current, fast: !on }))
-        }
-        style={{
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "center",
-          height: 24,
-          flexShrink: 0,
-          paddingLeft: space.sm,
-          paddingRight: space.sm,
-          borderRadius: radius.sm,
-          backgroundColor: on ? color.selected : undefined,
-          cursor: "pointer",
-          userSelect: "none",
-          hover: { backgroundColor: on ? color.selected : color.hover },
-        }}
+        active={on}
+        onClick={() => updateSession(session.id, (current) => ({ ...current, fast: !on }))}
       >
         <Label size={text.micro} color={on ? color.text : color.ghost}>
           {tier.label}
         </Label>
-      </div>
+      </Chip>
     </Explain>
   )
 }
 
+const DIAL_TRACK_WIDTH = 208
+const DIAL_TRACK_HEIGHT = 26
+const DIAL_TRACK_PAD = 13
+const DIAL_HANDLE = 20
+
+function EffortDial({
+  value,
+  options,
+  onChange,
+  testId,
+}: {
+  value: string
+  options: string[]
+  onChange: (value: string) => void
+  testId?: string
+}) {
+  const [drag, setDrag] = useState<{ from: number; at: number; offset: number } | null>(null)
+
+  const index = Math.max(0, options.indexOf(value))
+  const last = Math.max(1, options.length - 1)
+  const inner = DIAL_TRACK_WIDTH - DIAL_TRACK_PAD * 2
+  const step = inner / last
+  const dotAt = (at: number) => DIAL_TRACK_PAD + Math.round(step * at)
+
+  const ahead = DIAL_TRACK_PAD - DIAL_HANDLE / 2
+  const centre = drag
+    ? Math.min(
+        DIAL_TRACK_WIDTH - DIAL_TRACK_PAD,
+        Math.max(DIAL_TRACK_PAD, dotAt(drag.from) + drag.offset),
+      )
+    : dotAt(index)
+
+  const settle: MotionTransition = drag
+    ? { duration: 0 }
+    : { duration: 0.15, ease: [0.23, 1, 0.32, 1] }
+
+  const begin = (at: number, x: number | undefined) => {
+    if (options[at] !== value) onChange(options[at]!)
+    if (x !== undefined) setDrag({ from: at, at: x, offset: 0 })
+  }
+
+  const move = (x: number | undefined) => {
+    if (!drag || x === undefined) return
+    const offset = x - drag.at
+    setDrag({ ...drag, offset })
+    const to = Math.min(
+      last,
+      Math.max(0, Math.round((dotAt(drag.from) + offset - DIAL_TRACK_PAD) / step)),
+    )
+    if (options[to] !== value) onChange(options[to]!)
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: space.md, minWidth: 0 }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          gap: space.md,
+        }}
+      >
+        <Label size={text.small} color={color.tertiary}>
+          Effort
+        </Label>
+        <Label grow size={text.small} color={color.text}>
+          {value}
+        </Label>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <Label size={text.micro} color={color.ghost}>
+          Faster
+        </Label>
+        <Label size={text.micro} color={color.ghost}>
+          Smarter
+        </Label>
+      </div>
+
+      <div
+        testId={testId}
+        onMouseLeave={() => setDrag(null)}
+        style={{
+          position: "relative",
+          width: DIAL_TRACK_WIDTH,
+          height: DIAL_TRACK_HEIGHT,
+          flexShrink: 0,
+          borderRadius: DIAL_TRACK_HEIGHT / 2,
+          backgroundColor: color.muted,
+          cursor: "pointer",
+          userSelect: "none",
+        }}
+      >
+        <div
+          testId={testId ? `${testId}-trail` : undefined}
+          style={{ position: "absolute", top: 0, bottom: 0, left: 0 }}
+        >
+          <motion.div
+            initial={false}
+            animate={{
+              width: Math.min(
+                DIAL_TRACK_WIDTH,
+                Math.round(centre + DIAL_HANDLE / 2 + ahead),
+              ),
+            }}
+            transition={settle}
+            style={{
+              height: "100%",
+              borderRadius: DIAL_TRACK_HEIGHT / 2,
+              backgroundColor: color.pressed,
+            }}
+          />
+        </div>
+        {options.map((option, at) => (
+          <div
+            key={`dot-${option}`}
+            style={{
+              position: "absolute",
+              top: Math.round((DIAL_TRACK_HEIGHT - 3) / 2),
+              left: dotAt(at) - 1,
+              width: 3,
+              height: 3,
+              borderRadius: 2,
+              backgroundColor: at <= index ? color.tertiary : color.faint,
+            }}
+          />
+        ))}
+        <motion.div
+          initial={false}
+          animate={{ left: Math.round(centre - DIAL_HANDLE / 2) }}
+          transition={settle}
+          style={{
+            position: "absolute",
+            top: Math.round((DIAL_TRACK_HEIGHT - DIAL_HANDLE) / 2),
+            width: DIAL_HANDLE,
+            height: DIAL_HANDLE,
+            borderRadius: DIAL_HANDLE / 2,
+            backgroundColor: color.text,
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left: 0,
+            right: 0,
+            display: "flex",
+            flexDirection: "row",
+          }}
+        >
+          {options.map((option, at) => (
+            <div
+              key={option}
+              testId={testId ? `${testId}-${option}` : undefined}
+              onMouseDown={(event: EventPayload) => begin(at, event.x)}
+              onMouseMove={(event: EventPayload) => move(event.x)}
+              onMouseUp={() => setDrag(null)}
+              onClick={() => {
+                setDrag(null)
+                if (option !== value) onChange(option)
+              }}
+              style={{ flexGrow: 1, flexBasis: 0, height: "100%" }}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function EffortPicker({ session }: { session: Session }) {
-  const [open, setOpen] = useState(false)
   const chosen = sessionModel(useApp(), session)
   const options = chosen?.efforts ?? []
   const value =
@@ -108,30 +310,13 @@ export function EffortPicker({ session }: { session: Session }) {
   if (options.length < 2) return null
 
   return (
-    <Select open={open} onOpenChange={setOpen} value="effort" onValueChange={() => {}}>
+    <Select value="effort" onValueChange={() => {}}>
       <SelectTrigger asChild>
-        <div
-          testId="effort-trigger"
-          style={{
-            display: "flex",
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "center",
-            height: 24,
-            flexShrink: 0,
-            width: effortTriggerWidth(options),
-            paddingLeft: space.sm,
-            paddingRight: space.sm,
-            borderRadius: radius.sm,
-            cursor: "pointer",
-            userSelect: "none",
-            hover: { backgroundColor: color.hover },
-          }}
-        >
+        <Chip testId="effort-trigger" width={effortTriggerWidth(options)} justify="center">
           <Label size={text.micro} color={color.tertiary}>
             {value}
           </Label>
-        </div>
+        </Chip>
       </SelectTrigger>
 
       <SelectContent
@@ -154,38 +339,21 @@ export function EffortPicker({ session }: { session: Session }) {
 }
 
 export function BackgroundChip({ session }: { session: Session }) {
-  const [open, setOpen] = useState(false)
   const running = useApp().background[session.id] ?? []
   const live = running.filter((entry) => entry.exit === null)
   if (live.length === 0) return null
 
   return (
-    <Select open={open} onOpenChange={setOpen} value="background" onValueChange={() => {}}>
+    <Select value="background" onValueChange={() => {}}>
       <SelectTrigger asChild>
-        <div
-          testId="background-chip"
-          style={{
-            display: "flex",
-            flexDirection: "row",
-            alignItems: "center",
-            gap: space.sm,
-            height: 24,
-            flexShrink: 0,
-            paddingLeft: space.sm,
-            paddingRight: space.sm,
-            borderRadius: radius.sm,
-            cursor: "pointer",
-            userSelect: "none",
-            hover: { backgroundColor: color.hover },
-          }}
-        >
+        <Chip testId="background-chip">
           <div
             style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color.tertiary }}
           />
           <Label size={text.micro} color={color.tertiary}>
             {`${live.length} running`}
           </Label>
-        </div>
+        </Chip>
       </SelectTrigger>
 
       <SelectContent
@@ -247,23 +415,7 @@ export function ModePicker({ session }: { session: Session }) {
       }
     >
       <SelectTrigger asChild>
-        <div
-          testId="permission-mode"
-          style={{
-            display: "flex",
-            flexDirection: "row",
-            alignItems: "center",
-            gap: space.sm,
-            height: 24,
-            flexShrink: 0,
-            paddingLeft: space.sm,
-            paddingRight: space.sm,
-            borderRadius: radius.sm,
-            cursor: "pointer",
-            userSelect: "none",
-            hover: { backgroundColor: color.hover },
-          }}
-        >
+        <Chip testId="permission-mode">
           <Label size={text.micro} color={color.tertiary}>
             {current.label}
           </Label>
@@ -271,7 +423,7 @@ export function ModePicker({ session }: { session: Session }) {
             <Icon name="shieldAlert" size={11} color={color.ghost} />
           ) : null}
           <Icon name="chevronDown" size={11} color={color.ghost} />
-        </div>
+        </Chip>
       </SelectTrigger>
 
       <SelectContent

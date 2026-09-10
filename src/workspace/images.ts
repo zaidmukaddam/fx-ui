@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, statSync } from "node:fs"
 import path from "node:path"
 
 import { IMAGE_TYPES, isAttachment, MAX_IMAGE_BYTES } from "../tools"
-import { appendMessage, ATTACHMENT_DIR, getState, newId, setAttachments } from "../store"
+import { ATTACHMENT_DIR, getState, newId, notice, setAttachments } from "../store"
 import { capture } from "./run"
 
 export const CAN_PICK_IMAGES = process.platform === "darwin"
@@ -34,22 +34,18 @@ repeat with image_file in picked
 end repeat
 return chosen`
 
-function tell(sessionId: string, text: string, tone: "info" | "error" = "error"): void {
-  appendMessage(sessionId, { id: newId(), kind: "notice", at: Date.now(), tone, text })
-}
-
 export function attachImages(sessionId: string, files: string[]): void {
   const kept: string[] = []
   for (const file of files) {
     const name = path.basename(file)
     const extension = path.extname(file).toLowerCase()
     if (!(extension in IMAGE_TYPES)) {
-      tell(sessionId, `${name} is not an image fx can read. It takes ${Object.keys(IMAGE_TYPES).join(", ")}.`)
+      notice(sessionId, "error", `${name} is not an image fx can read. It takes ${Object.keys(IMAGE_TYPES).join(", ")}.`)
       continue
     }
     try {
       if (statSync(file).size > MAX_IMAGE_BYTES) {
-        tell(sessionId, `${name} is too large to attach.`)
+        notice(sessionId, "error", `${name} is too large to attach.`)
         continue
       }
       if (isAttachment(file)) {
@@ -61,7 +57,7 @@ export function attachImages(sessionId: string, files: string[]): void {
       copyFileSync(file, copy)
       kept.push(copy)
     } catch (error) {
-      tell(sessionId, `${name} could not be attached: ${error instanceof Error ? error.message : String(error)}`)
+      notice(sessionId, "error", `${name} could not be attached: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
   if (kept.length > 0) {
@@ -77,17 +73,17 @@ export async function pasteImage(sessionId: string): Promise<void> {
       timeoutMs: 10_000,
     })
     if (result.code !== 0) {
-      tell(sessionId, `The clipboard could not be read: ${result.stderr.trim()}`)
+      notice(sessionId, "error", `The clipboard could not be read: ${result.stderr.trim()}`)
       return
     }
     const files = JSON.parse(result.stdout || "[]") as string[]
     if (files.length === 0) {
-      tell(sessionId, "The clipboard has no image in it.", "info")
+      notice(sessionId, "info", "The clipboard has no image in it.")
       return
     }
     attachImages(sessionId, files)
   } catch (error) {
-    tell(sessionId, `The clipboard could not be read: ${error instanceof Error ? error.message : String(error)}`)
+    notice(sessionId, "error", `The clipboard could not be read: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
@@ -96,9 +92,9 @@ export async function chooseImages(sessionId: string): Promise<void> {
     const result = await capture("osascript", ["-e", CHOOSE_IMAGES], {})
     if (result.code === 0) attachImages(sessionId, result.stdout.split("\n").filter(Boolean))
     else if (!result.stderr.includes("(-128)")) {
-      tell(sessionId, `The file picker failed: ${result.stderr.trim()}`)
+      notice(sessionId, "error", `The file picker failed: ${result.stderr.trim()}`)
     }
   } catch (error) {
-    tell(sessionId, `The file picker could not open: ${error instanceof Error ? error.message : String(error)}`)
+    notice(sessionId, "error", `The file picker could not open: ${error instanceof Error ? error.message : String(error)}`)
   }
 }

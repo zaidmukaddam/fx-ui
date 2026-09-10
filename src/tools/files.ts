@@ -4,14 +4,13 @@ import os from "node:os"
 import path from "node:path"
 
 import { capture, isMissingProgram } from "../workspace/run"
-import { requestApproval } from "./approvals"
 import { recordEdit } from "./edits"
 import {
-  DENIED_PREFIX,
-  clip,
   defineTool,
   field,
+  gate,
   optionalNumber,
+  optionalString,
   requireString,
   type HostTool,
   type ToolContext,
@@ -87,7 +86,7 @@ export function fileTools(context: ToolContext): HostTool[] {
           },
         },
         parse: (input) => ({
-          path: typeof field(input, "path") === "string" ? (field(input, "path") as string) : ".",
+          path: optionalString(input, "path", "."),
           depth: Math.min(4, Math.max(1, optionalNumber(input, "depth") ?? 2)),
         }),
         label: (input) => input.path,
@@ -193,7 +192,7 @@ export function fileTools(context: ToolContext): HostTool[] {
         },
         parse: (input) => ({
           pattern: requireString(input, "pattern"),
-          path: typeof field(input, "path") === "string" ? (field(input, "path") as string) : ".",
+          path: optionalString(input, "path", "."),
         }),
         label: (input) => input.pattern,
         run: async (input, ctx) => {
@@ -217,7 +216,7 @@ export function fileTools(context: ToolContext): HostTool[] {
           const cleaned = stdout.split(`${ctx.root}/`).join("")
           const matches = cleaned.trim() ? cleaned.trimEnd().split("\n").length : 0
           return {
-            text: cleaned.trim() ? clip(cleaned) : "No matches.",
+            text: cleaned.trim() ? cleaned : "No matches.",
             label: `${input.pattern} · ${matches} matches`,
           }
         },
@@ -271,37 +270,28 @@ export function fileTools(context: ToolContext): HostTool[] {
         },
         parse: (input) => ({
           path: requireString(input, "path"),
-          content: String(field(input, "content") ?? ""),
+          content: optionalString(input, "content", ""),
         }),
         label: (input) => input.path,
         run: async (input, ctx) => {
           const target = resolveInside(ctx.root, input.path)
           const relative = display(ctx.root, target)
-          const before = existsSync(target) ? readFileSync(target, "utf8") : ""
-          const patch = await unifiedDiff(relative, before, input.content)
+          const before = existsSync(target) ? readFileSync(target, "utf8") : null
+          const patch = await unifiedDiff(relative, before ?? "", input.content)
           if (!patch) return { text: `${relative} already had those contents.`, label: relative }
 
-          const approved = await requestApproval({
-            sessionId: ctx.sessionId,
-            toolName: "write_file",
-            title: existsSync(target) ? `Overwrite ${relative}` : `Create ${relative}`,
+          await gate(ctx, {
+            title: before === null ? `Create ${relative}` : `Overwrite ${relative}`,
             detail: relative,
             patch,
             scope: "write",
             routine: true,
+            denied: `${relative} was not written.`,
           })
-          if (!approved) throw new Error(`${DENIED_PREFIX}: ${relative} was not written.`)
 
-          const existed = existsSync(target)
           mkdirSync(path.dirname(target), { recursive: true })
           writeFileSync(target, input.content)
-          recordEdit(
-            ctx.sessionId,
-            target,
-            relative,
-            existed ? before : null,
-            input.content,
-          )
+          recordEdit(ctx.sessionId, target, relative, before, input.content)
           const { added, removed } = countChanges(patch)
           return {
             text: `Wrote ${relative} (+${added} −${removed}).`,
@@ -331,7 +321,7 @@ export function fileTools(context: ToolContext): HostTool[] {
         parse: (input) => ({
           path: requireString(input, "path"),
           oldText: requireString(input, "old_text"),
-          newText: String(field(input, "new_text") ?? ""),
+          newText: optionalString(input, "new_text", ""),
           all: field(input, "replace_all") === true,
         }),
         label: (input) => input.path,
@@ -353,16 +343,14 @@ export function fileTools(context: ToolContext): HostTool[] {
             : before.replace(input.oldText, input.newText)
           const patch = await unifiedDiff(relative, before, after)
 
-          const approved = await requestApproval({
-            sessionId: ctx.sessionId,
-            toolName: "edit_file",
+          await gate(ctx, {
             title: `Edit ${relative}`,
             detail: relative,
             patch,
             scope: "write",
             routine: true,
+            denied: `${relative} was not edited.`,
           })
-          if (!approved) throw new Error(`${DENIED_PREFIX}: ${relative} was not edited.`)
 
           writeFileSync(target, after)
           recordEdit(ctx.sessionId, target, relative, before, after)

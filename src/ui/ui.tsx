@@ -1,8 +1,6 @@
-import { useState, type ReactNode } from "react"
+import { type ReactNode } from "react"
 import { existsSync } from "node:fs"
-import { motion } from "@gpuix/react"
-import type { MotionTransition } from "@gpuix/react"
-import type { EventPayload } from "@gpuix/native"
+import { useWindowSize } from "@gpuix/react"
 import {
   Tooltip,
   TooltipContent,
@@ -14,11 +12,6 @@ import { Icon, type IconName } from "./icons"
 import { color, FONT, nativeTheme, radius, space, text } from "./theme"
 
 export { TooltipProvider }
-
-const DIAL_TRACK_WIDTH = 208
-const DIAL_TRACK_HEIGHT = 26
-const DIAL_TRACK_PAD = 13
-const DIAL_HANDLE = 20
 
 export function Label({
   children,
@@ -321,6 +314,25 @@ export function overlayStyle(paddingX: number, paddingY: number) {
   }
 }
 
+export function Backdrop({ width, top, children }: {
+  width: number
+  top: number
+  children: ReactNode
+}) {
+  const size = useWindowSize()
+  return (
+    <anchored
+      deferred
+      position={{ x: Math.max(0, Math.round((size.width - width) / 2)), y: top }}
+      anchor="topLeft"
+      occlude
+      style={{ borderRadius: radius.lg }}
+    >
+      {children}
+    </anchored>
+  )
+}
+
 export function Kbd({ keys }: { keys: string }) {
   return (
     <div
@@ -374,141 +386,18 @@ export function Badge({
   )
 }
 
-export const FX_MARK = [
-  " \u2800\u2800\u2800\u2800\u2800\u2800\u28e0\u28fe\u28ff\u28ff\u28ff\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800",
-  " \u2800\u2800\u2800\u2800\u2800\u28b0\u28ff\u287f\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800",
-  " \u2800\u2800\u2800\u28e0\u28f6\u28ff\u28ff\u28f7\u28f6\u2876\u28f6\u28f6\u28c6\u2800\u2800\u2800\u28f4\u28f6\u28f6\u2806",
-  " \u2800\u2800\u2800\u2809\u28b9\u28ff\u28ff\u2809\u2809\u2800\u2818\u28bf\u28ff\u28e7\u28c0\u28fe\u28ff\u287f\u2803\u2800",
-  " \u2800\u2800\u2800\u2800\u28fc\u28ff\u284f\u2800\u2800\u2800\u2800\u2800\u283b\u28ff\u28ff\u28ff\u281f\u2800\u2800\u2800",
-  " \u2800\u2800\u2800\u2880\u28ff\u28ff\u2803\u2800\u2800\u2800\u2800\u28a0\u28e6\u2818\u28bf\u28ff\u28f7\u2840\u2800\u2800",
-  " \u2800\u2800\u2800\u28f8\u28ff\u285f\u2800\u2800\u2800\u2800\u28f0\u28ff\u28ff\u2817\u2800\u283b\u28ff\u28ff\u28c4\u2800",
-  " \u2800\u2800\u2800\u28ff\u28ff\u2807\u2800\u2800\u2800\u283e\u283f\u283f\u280b\u2800\u2800\u2800\u2818\u283f\u283f\u2826",
-  "  \u2800\u28f8\u28ff\u287f\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800",
-  " \u28ff\u28ff\u28ff\u281f\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800\u2800",
-].join("\n")
-
-export function EmptyState({
-  icon,
-  art,
-  title,
-  description,
-  action,
-  hints,
-}: {
-  icon: IconName
-  art?: string
-  title: string
-  description: string
-  action?: { label: string; icon?: IconName; onClick: () => void; testId?: string }
-  hints?: { keys: string; label: string }[]
-}) {
-  return (
-    <div
-      style={{
-        flexGrow: 1,
-        minHeight: 0,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: space.lg,
-        paddingLeft: space.xxl,
-        paddingRight: space.xxl,
-      }}
-    >
-      {art ? (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.3, ease: "easeOut" }}
-        >
-        <text
-          testId="empty-art"
-          style={{
-            fontSize: text.small,
-            fontFamily: FONT,
-            lineHeight: Math.round(text.small * 1.05),
-            color: color.faint,
-            whiteSpace: "nowrap",
-            userSelect: "none",
-          }}
-        >
-          {art}
-        </text>
-        </motion.div>
-      ) : (
-        <Icon name={icon} size={20} color={color.faint} />
-      )}
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: space.sm,
-          maxWidth: 460,
-        }}
-      >
-        <Label size={text.title} color={color.text}>
-          {title}
-        </Label>
-        <Paragraph align="center" color={color.faint}>
-          {description}
-        </Paragraph>
-      </div>
-      {action ? (
-        <Button
-          label={action.label}
-          icon={action.icon}
-          onClick={action.onClick}
-          testId={action.testId}
-          variant="secondary"
-        />
-      ) : null}
-      {hints && hints.length > 0 ? (
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "row",
-            alignItems: "center",
-            gap: space.lg,
-            paddingTop: space.sm,
-          }}
-        >
-          {hints.map((hint) => (
-            <div
-              key={hint.keys}
-              style={{
-                display: "flex",
-                flexDirection: "row",
-                alignItems: "center",
-                gap: space.sm,
-              }}
-            >
-              <Kbd keys={hint.keys} />
-              <Label size={text.micro} color={color.ghost}>
-                {hint.label}
-              </Label>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  )
-}
 
 export function TextField({
   value,
   placeholder,
   onChange,
   onSubmit,
-  secret,
   testId,
 }: {
   value: string
   placeholder: string
   onChange: (value: string) => void
   onSubmit: () => void
-  secret?: boolean
   testId: string
 }) {
   return (
@@ -538,180 +427,6 @@ export function TextField({
           style={fieldStyle(text.body).text}
         />
       </div>
-    </div>
-  )
-}
-
-export function EffortDial({
-  value,
-  options,
-  onChange,
-  testId,
-}: {
-  value: string
-  options: string[]
-  onChange: (value: string) => void
-  testId?: string
-}) {
-  const [drag, setDrag] = useState<{ from: number; at: number; offset: number } | null>(null)
-
-  const index = Math.max(0, options.indexOf(value))
-  const last = Math.max(1, options.length - 1)
-  const inner = DIAL_TRACK_WIDTH - DIAL_TRACK_PAD * 2
-  const step = inner / last
-  const dotAt = (at: number) => DIAL_TRACK_PAD + Math.round(step * at)
-
-  const ahead = DIAL_TRACK_PAD - DIAL_HANDLE / 2
-  const centre = drag
-    ? Math.min(
-        DIAL_TRACK_WIDTH - DIAL_TRACK_PAD,
-        Math.max(DIAL_TRACK_PAD, dotAt(drag.from) + drag.offset),
-      )
-    : dotAt(index)
-
-  const settle: MotionTransition = drag
-    ? { duration: 0 }
-    : { duration: 0.15, ease: [0.23, 1, 0.32, 1] }
-
-  const begin = (at: number, x: number | undefined) => {
-    if (options[at] !== value) onChange(options[at]!)
-    if (x !== undefined) setDrag({ from: at, at: x, offset: 0 })
-  }
-
-  const move = (x: number | undefined) => {
-    if (!drag || x === undefined) return
-    const offset = x - drag.at
-    setDrag({ ...drag, offset })
-    const to = Math.min(
-      last,
-      Math.max(0, Math.round((dotAt(drag.from) + offset - DIAL_TRACK_PAD) / step)),
-    )
-    if (options[to] !== value) onChange(options[to]!)
-  }
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: space.md, minWidth: 0 }}>
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "center",
-          gap: space.md,
-        }}
-      >
-        <Label size={text.small} color={color.tertiary}>
-          Effort
-        </Label>
-        <Label grow size={text.small} color={color.text}>
-          {value}
-        </Label>
-      </div>
-
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <Label size={text.micro} color={color.ghost}>
-          Faster
-        </Label>
-        <Label size={text.micro} color={color.ghost}>
-          Smarter
-        </Label>
-      </div>
-
-      <div
-        testId={testId}
-        onMouseLeave={() => setDrag(null)}
-        style={{
-          position: "relative",
-          width: DIAL_TRACK_WIDTH,
-          height: DIAL_TRACK_HEIGHT,
-          flexShrink: 0,
-          borderRadius: DIAL_TRACK_HEIGHT / 2,
-          backgroundColor: color.muted,
-          cursor: "pointer",
-          userSelect: "none",
-        }}
-      >
-        <div
-          testId={testId ? `${testId}-trail` : undefined}
-          style={{ position: "absolute", top: 0, bottom: 0, left: 0 }}
-        >
-          <motion.div
-            initial={false}
-            animate={{
-              width: Math.min(
-                DIAL_TRACK_WIDTH,
-                Math.round(centre + DIAL_HANDLE / 2 + ahead),
-              ),
-            }}
-            transition={settle}
-            style={{
-              height: "100%",
-              borderRadius: DIAL_TRACK_HEIGHT / 2,
-              backgroundColor: color.pressed,
-            }}
-          />
-        </div>
-        {options.map((option, at) => (
-          <div
-            key={`dot-${option}`}
-            style={{
-              position: "absolute",
-              top: Math.round((DIAL_TRACK_HEIGHT - 3) / 2),
-              left: dotAt(at) - 1,
-              width: 3,
-              height: 3,
-              borderRadius: 2,
-              backgroundColor: at <= index ? color.tertiary : color.faint,
-            }}
-          />
-        ))}
-        <motion.div
-          initial={false}
-          animate={{ left: Math.round(centre - DIAL_HANDLE / 2) }}
-          transition={settle}
-          style={{
-            position: "absolute",
-            top: Math.round((DIAL_TRACK_HEIGHT - DIAL_HANDLE) / 2),
-            width: DIAL_HANDLE,
-            height: DIAL_HANDLE,
-            borderRadius: DIAL_HANDLE / 2,
-            backgroundColor: color.text,
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            bottom: 0,
-            left: 0,
-            right: 0,
-            display: "flex",
-            flexDirection: "row",
-          }}
-        >
-          {options.map((option, at) => (
-            <div
-              key={option}
-              testId={testId ? `${testId}-${option}` : undefined}
-              onMouseDown={(event: EventPayload) => begin(at, event.x)}
-              onMouseMove={(event: EventPayload) => move(event.x)}
-              onMouseUp={() => setDrag(null)}
-              onClick={() => {
-                setDrag(null)
-                if (option !== value) onChange(option)
-              }}
-              style={{ flexGrow: 1, flexBasis: 0, height: "100%" }}
-            />
-          ))}
-        </div>
-      </div>
-
     </div>
   )
 }

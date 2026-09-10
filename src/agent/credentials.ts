@@ -12,9 +12,8 @@ import { listProviderModels } from "./providers"
 import { GATEWAY_URL } from "../tools"
 import {
   apiKeySource,
-  appendMessage,
   getState,
-  newId,
+  notice,
   setState,
   type Model,
 } from "../store"
@@ -22,8 +21,7 @@ import {
 function tell(text: string, tone: "info" | "error" = "info"): void {
   const state = getState()
   const focused = state.panes[state.focusedPane]?.sessionId ?? null
-  if (!focused) return
-  appendMessage(focused, { id: newId(), kind: "notice", at: Date.now(), tone, text })
+  if (focused) notice(focused, tone, text)
 }
 
 export async function signInWithFx(): Promise<void> {

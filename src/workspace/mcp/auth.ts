@@ -1,11 +1,7 @@
-import { createHash, randomBytes } from "node:crypto"
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
-import { createServer } from "node:http"
 import path from "node:path"
 
+import { dedupe, jsonStore, loopbackCallback, pkce, postForm, postJson, requestJson } from "../../oauth-core"
 import { DIR } from "../../store"
-
-const FILE = path.join(DIR, "mcp-auth.json")
 
 const REFRESH_MARGIN_MS = 120_000
 const LOGIN_TIMEOUT_MS = 300_000
@@ -22,66 +18,27 @@ export type ServerAuth = {
   resource: string
 }
 
-type Store = Record<string, ServerAuth>
-
-function readStore(): Store {
-  try {
-    return JSON.parse(readFileSync(FILE, "utf8")) as Store
-  } catch {
-    return {}
-  }
-}
-
-function writeStore(store: Store): void {
-  mkdirSync(DIR, { recursive: true })
-  const temporary = `${FILE}.${process.pid}.tmp`
-  writeFileSync(temporary, JSON.stringify(store), { mode: 0o600 })
-  renameSync(temporary, FILE)
-  chmodSync(FILE, 0o600)
-}
+const store = jsonStore<Record<string, ServerAuth>>(path.join(DIR, "mcp-auth.json"), {})
 
 export function storedAuth(server: string): ServerAuth | null {
-  return readStore()[server] ?? null
+  return store.read()[server] ?? null
 }
 
 export function authorisedServers(): string[] {
-  return Object.keys(readStore())
+  return Object.keys(store.read())
 }
 
 export function signOutOfServer(server: string): void {
-  const store = readStore()
-  if (!(server in store)) return
-  delete store[server]
-  writeStore(store)
+  const current = store.read()
+  if (!(server in current)) return
+  delete current[server]
+  store.write(current)
 }
 
 function save(server: string, auth: ServerAuth): void {
-  const store = readStore()
-  store[server] = auth
-  writeStore(store)
-}
-
-function base64url(bytes: Buffer): string {
-  return bytes.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-}
-
-async function json(
-  url: string,
-  init?: RequestInit,
-): Promise<Record<string, unknown>> {
-  const response = await fetch(url, {
-    ...init,
-    signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
-  })
-  const body = await response.text()
-  if (!response.ok) {
-    throw new Error(`${new URL(url).host} answered ${response.status}${body ? `: ${body.slice(0, 200)}` : ""}`)
-  }
-  try {
-    return JSON.parse(body) as Record<string, unknown>
-  } catch {
-    throw new Error(`${new URL(url).host} did not answer with JSON`)
-  }
+  const current = store.read()
+  current[server] = auth
+  store.write(current)
 }
 
 function text(value: unknown): string | undefined {
@@ -108,7 +65,7 @@ export async function discover(
   challenge: string | null,
 ): Promise<Discovered> {
   const metadataUrl = resourceMetadataUrl(challenge, endpoint)
-  const resourceMetadata = await json(metadataUrl)
+  const resourceMetadata = await requestJson(metadataUrl, undefined, DISCOVERY_TIMEOUT_MS)
   const issuers = resourceMetadata.authorization_servers
   const issuer = Array.isArray(issuers) ? text(issuers[0]) : undefined
   if (!issuer) {
@@ -126,7 +83,7 @@ export async function discover(
   let last: Error | null = null
   for (const candidate of candidates) {
     try {
-      const server = await json(candidate)
+      const server = await requestJson(candidate, undefined, DISCOVERY_TIMEOUT_MS)
       const authorizeEndpoint = text(server.authorization_endpoint)
       const tokenEndpoint = text(server.token_endpoint)
       if (!authorizeEndpoint || !tokenEndpoint) continue
@@ -155,71 +112,21 @@ async function register(
       "the server's authorization server does not offer dynamic client registration, so this app cannot sign in to it",
     )
   }
-  const body = await json(found.registrationEndpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+  const body = await postJson(
+    found.registrationEndpoint,
+    {
       client_name: "fx-ui",
       redirect_uris: [redirectUri],
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
       ...(found.scope ? { scope: found.scope } : {}),
-    }),
-  })
+    },
+    DISCOVERY_TIMEOUT_MS,
+  )
   const clientId = text(body.client_id)
   if (!clientId) throw new Error("the authorization server issued no client id")
   return { clientId, clientSecret: text(body.client_secret) }
-}
-
-function loopback(): Promise<{
-  redirectUri: string
-  code: Promise<{ code: string; state: string }>
-  close: () => void
-}> {
-  return new Promise((resolve, reject) => {
-    let settle: (value: { code: string; state: string }) => void
-    let fail: (error: Error) => void
-    const code = new Promise<{ code: string; state: string }>((ok, no) => {
-      settle = ok
-      fail = no
-    })
-
-    const server = createServer((request, response) => {
-      const url = new URL(request.url ?? "/", "http://127.0.0.1")
-      if (url.pathname !== "/callback") {
-        response.writeHead(404).end()
-        return
-      }
-      const error = url.searchParams.get("error")
-      const received = url.searchParams.get("code")
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8" })
-      response.end(
-        `<!doctype html><meta charset="utf-8"><title>fx-ui</title>` +
-          `<body style="font:14px ui-monospace,monospace;background:#000;color:#ededed;padding:48px">` +
-          (error || !received
-            ? `Sign-in failed: ${error ?? "no code returned"}.`
-            : `Signed in. You can close this tab.`) +
-          `</body>`,
-      )
-      if (error || !received) fail(new Error(error ?? "the server returned no code"))
-      else settle({ code: received, state: url.searchParams.get("state") ?? "" })
-    })
-
-    server.on("error", reject)
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address()
-      if (address === null || typeof address === "string") {
-        reject(new Error("the callback listener reported no port"))
-        return
-      }
-      resolve({
-        redirectUri: `http://127.0.0.1:${address.port}/callback`,
-        code,
-        close: () => server.close(),
-      })
-    })
-  })
 }
 
 async function exchange(
@@ -227,16 +134,16 @@ async function exchange(
   client: { clientId: string; clientSecret?: string },
   form: Record<string, string>,
 ): Promise<ServerAuth> {
-  const body = await json(found.tokenEndpoint, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
+  const body = await postForm(
+    found.tokenEndpoint,
+    {
       ...form,
       client_id: client.clientId,
       ...(client.clientSecret ? { client_secret: client.clientSecret } : {}),
       resource: found.resource,
-    }).toString(),
-  })
+    },
+    DISCOVERY_TIMEOUT_MS,
+  )
   const accessToken = text(body.access_token)
   if (!accessToken) throw new Error("the authorization server issued no access token")
   const lifetime = typeof body.expires_in === "number" ? body.expires_in * 1000 : undefined
@@ -265,21 +172,21 @@ export async function beginServerSignIn(
   open: (url: string) => Promise<void>,
 ): Promise<PendingServerSignIn> {
   const found = await discover(endpoint, challenge)
-  const listener = await loopback()
-  const client = await register(found, listener.redirectUri).catch((error: unknown) => {
+  const listener = await loopbackCallback({ label: server, ports: [], callbackPath: "/callback" })
+  const redirectUri = `http://127.0.0.1:${listener.port}/callback`
+  const client = await register(found, redirectUri).catch((error: unknown) => {
     listener.close()
     throw error
   })
 
-  const verifier = base64url(randomBytes(32))
-  const state = base64url(randomBytes(16))
+  const { verifier, challenge: codeChallenge, state } = pkce()
   const url = new URL(found.authorizeEndpoint)
   for (const [key, value] of Object.entries({
     response_type: "code",
     client_id: client.clientId,
-    redirect_uri: listener.redirectUri,
+    redirect_uri: redirectUri,
     state,
-    code_challenge: base64url(createHash("sha256").update(verifier).digest()),
+    code_challenge: codeChallenge,
     code_challenge_method: "S256",
     resource: found.resource,
     ...(found.scope ? { scope: found.scope } : {}),
@@ -295,7 +202,7 @@ export async function beginServerSignIn(
       const auth = await exchange(found, client, {
         grant_type: "authorization_code",
         code: returned.code,
-        redirect_uri: listener.redirectUri,
+        redirect_uri: redirectUri,
         code_verifier: verifier,
       })
       save(server, auth)
@@ -309,6 +216,8 @@ export async function beginServerSignIn(
   return { url: url.toString(), completed, cancel: () => listener.close() }
 }
 
+const dedupeRefresh = dedupe<string, string>()
+
 export async function accessTokenFor(server: string): Promise<string | null> {
   const auth = storedAuth(server)
   if (!auth) return null
@@ -316,20 +225,23 @@ export async function accessTokenFor(server: string): Promise<string | null> {
     return auth.accessToken
   }
   if (!auth.refreshToken) return auth.accessToken
+  const refreshToken = auth.refreshToken
 
-  try {
-    const refreshed = await exchange(
-      {
-        authorizeEndpoint: auth.authorizeEndpoint,
-        tokenEndpoint: auth.tokenEndpoint,
-        resource: auth.resource,
-      },
-      { clientId: auth.clientId, clientSecret: auth.clientSecret },
-      { grant_type: "refresh_token", refresh_token: auth.refreshToken },
-    )
-    save(server, { ...refreshed, refreshToken: refreshed.refreshToken ?? auth.refreshToken })
-    return refreshed.accessToken
-  } catch {
-    return auth.accessToken
-  }
+  return dedupeRefresh(server, async () => {
+    try {
+      const refreshed = await exchange(
+        {
+          authorizeEndpoint: auth.authorizeEndpoint,
+          tokenEndpoint: auth.tokenEndpoint,
+          resource: auth.resource,
+        },
+        { clientId: auth.clientId, clientSecret: auth.clientSecret },
+        { grant_type: "refresh_token", refresh_token: refreshToken },
+      )
+      save(server, { ...refreshed, refreshToken: refreshed.refreshToken ?? auth.refreshToken })
+      return refreshed.accessToken
+    } catch {
+      return auth.accessToken
+    }
+  })
 }

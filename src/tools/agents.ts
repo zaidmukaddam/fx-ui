@@ -9,6 +9,7 @@ import {
   defineTool,
   field,
   optionalNumber,
+  optionalString,
   readRetained,
   requireString,
   searchRows,
@@ -44,18 +45,15 @@ export function agentTools(
           },
           required: ["handle"],
         },
-        parse: (input) => {
-          const query = field(input, "query")
-          return {
-            handle: requireString(input, "handle"),
-            offset: Math.max(0, Math.floor(optionalNumber(input, "offset") ?? 0)),
-            limit: Math.min(
-              MAX_OUTPUT_CHARS,
-              Math.max(1, Math.floor(optionalNumber(input, "limit") ?? 8_000)),
-            ),
-            query: typeof query === "string" && query ? query : undefined,
-          }
-        },
+        parse: (input) => ({
+          handle: requireString(input, "handle"),
+          offset: Math.max(0, Math.floor(optionalNumber(input, "offset") ?? 0)),
+          limit: Math.min(
+            MAX_OUTPUT_CHARS,
+            Math.max(1, Math.floor(optionalNumber(input, "limit") ?? 8_000)),
+          ),
+          query: optionalString(input, "query") || undefined,
+        }),
         label: (input) => (input.query ? `search ${input.query}` : `read ${input.offset}`),
         run: async (input, ctx) => {
           const entry = readRetained(input.handle)
@@ -111,13 +109,10 @@ export function agentTools(
                 },
                 required: ["task"],
               },
-              parse: (input) => {
-                const extra = field(input, "instructions")
-                return {
-                  task: requireString(input, "task"),
-                  instructions: typeof extra === "string" && extra ? extra : undefined,
-                }
-              },
+              parse: (input) => ({
+                task: requireString(input, "task"),
+                instructions: optionalString(input, "instructions") || undefined,
+              }),
               label: (input) => input.task,
               run: async (input, ctx) => {
                 const back = backing(

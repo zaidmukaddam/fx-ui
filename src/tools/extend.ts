@@ -3,11 +3,10 @@ import path from "node:path"
 
 import { listMcpServers, listMcpTools } from "../workspace/mcp"
 import { loadSkills } from "../workspace/skills"
-import { requestApproval } from "./approvals"
 import {
-  DENIED_PREFIX,
   defineTool,
-  field,
+  gate,
+  optionalString,
   requireString,
   type HostTool,
   type ToolContext,
@@ -79,15 +78,12 @@ export function extensionTools(context: ToolContext): HostTool[] {
           }
 
           const fromUrl = /^https:\/\//.test(input.source)
-          const approved = await requestApproval({
-            sessionId: ctx.sessionId,
-            toolName: "install_skill",
+          await gate(ctx, {
             title: `Install the skill ${input.name}`,
             detail: fromUrl ? input.source : input.source.slice(0, 2_000),
             scope: "install_skill",
-            routine: false,
+            denied: `${input.name} was not installed.`,
           })
-          if (!approved) throw new Error(`${DENIED_PREFIX}: ${input.name} was not installed.`)
 
           let body = input.source
           if (fromUrl) {
@@ -125,10 +121,7 @@ export function extensionTools(context: ToolContext): HostTool[] {
             },
           },
         },
-        parse: (input) => {
-          const query = field(input, "query")
-          return { query: typeof query === "string" ? query : "" }
-        },
+        parse: (input) => ({ query: optionalString(input, "query", "") }),
         label: (input) => input.query || "everything",
         run: async (input, ctx) => {
           const needle = input.query.trim().toLowerCase()

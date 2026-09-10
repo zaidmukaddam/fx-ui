@@ -1,5 +1,4 @@
 import { useState } from "react"
-import { useWindowSize } from "@gpuix/react"
 import {
   Combobox,
   ComboboxInput,
@@ -9,42 +8,27 @@ import {
 
 import { Icon, type IconName } from "../ui/icons"
 import { color, nativeTheme, radius, space, text } from "../ui/theme"
-import {
-  Button,
-  Kbd,
-  Label,
-  Paragraph,
-  TextField,
-  fieldStyle,
-  overlayStyle,
-} from "../ui/ui"
+import { Backdrop, Kbd, Label, fieldStyle, overlayStyle } from "../ui/ui"
 import { cancel, reloadSkills } from "../agent/agent"
 import { setUseCli, signInWithFx } from "../agent/credentials"
-import { forgetGrants, isDirectory, lastEdit, undoLastEdit } from "../tools"
+import { forgetGrants, lastEdit, undoLastEdit } from "../tools"
 import {
-  appendMessage,
   clearNotices,
-  newId,
-  createSession,
-  createWorkspace,
   findSession,
   findWorkspace,
+  notice,
   openSession,
-  removeSession,
-  removeWorkspace,
   setDialog,
   setPalette,
   setSettings,
   setSplit,
   setState,
-  updateSession,
+  startSession,
   type AppState,
 } from "../store"
-import path from "node:path"
 
 const PALETTE_WIDTH = 560
 const PALETTE_TOP = 96
-const DIALOG_WIDTH = 460
 const MAX_RESULTS = 8
 
 type Command = {
@@ -68,7 +52,7 @@ function buildCommands(state: AppState): Command[] {
       label: "New session",
       icon: "plus",
       hint: "⌘N",
-      run: () => openSession(createSession(workspaceId).id),
+      run: () => startSession(workspaceId),
     })
   }
   commands.push({
@@ -134,18 +118,10 @@ function buildCommands(state: AppState): Command[] {
       detail: "Puts the file back as it was, if nothing has changed it since",
       icon: "history",
       run: () => {
-        const tone = (text: string, kind: "info" | "error") =>
-          appendMessage(focused, {
-            id: newId(),
-            kind: "notice",
-            at: Date.now(),
-            tone: kind,
-            text,
-          })
         try {
-          tone(undoLastEdit(focused), "info")
+          notice(focused, "info", undoLastEdit(focused))
         } catch (error) {
-          tone(error instanceof Error ? error.message : String(error), "error")
+          notice(focused, "error", error instanceof Error ? error.message : String(error))
         }
       },
     })
@@ -234,25 +210,6 @@ function rank(commands: Command[], query: string): Command[] {
     .sort((a, b) => a.score - b.score)
     .slice(0, MAX_RESULTS)
     .map((entry) => entry.command)
-}
-
-function Backdrop({ width, top, children }: {
-  width: number
-  top: number
-  children: React.ReactNode
-}) {
-  const size = useWindowSize()
-  return (
-    <anchored
-      deferred
-      position={{ x: Math.max(0, Math.round((size.width - width) / 2)), y: top }}
-      anchor="topLeft"
-      occlude
-      style={{ borderRadius: radius.lg }}
-    >
-      {children}
-    </anchored>
-  )
 }
 
 export function CommandPalette({ state }: { state: AppState }) {
@@ -377,199 +334,3 @@ export function CommandPalette({ state }: { state: AppState }) {
   )
 }
 
-function DialogShell({
-  title,
-  description,
-  children,
-  onClose,
-}: {
-  title: string
-  description: string
-  children: React.ReactNode
-  onClose: () => void
-}) {
-  return (
-    <Backdrop width={DIALOG_WIDTH} top={140}>
-      <div
-        testId="dialog"
-        onMouseDownOutside={onClose}
-        style={{ ...overlayStyle(space.xl, space.xl), width: DIALOG_WIDTH, gap: space.lg }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-          <Label size={text.title} color={color.text}>
-            {title}
-          </Label>
-          <Paragraph size={text.small} color={color.tertiary}>
-            {description}
-          </Paragraph>
-        </div>
-        {children}
-      </div>
-    </Backdrop>
-  )
-}
-
-function ErrorLine({ message }: { message: string }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "row",
-        alignItems: "center",
-        gap: space.sm,
-      }}
-    >
-      <Icon name="circleAlert" size={12} color={color.danger} />
-      <Label size={text.small} color={color.danger}>
-        {message}
-      </Label>
-    </div>
-  )
-}
-
-function Actions({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "flex-end",
-        gap: space.md,
-      }}
-    >
-      {children}
-    </div>
-  )
-}
-
-export function Dialogs({ state }: { state: AppState }) {
-  const dialog = state.dialog
-  if (!dialog) return null
-  const close = () => setDialog(null)
-
-  if (dialog.kind === "add-workspace") {
-    const submit = () => {
-      const candidate = path.resolve(dialog.value.trim().replace(/^~/, process.env.HOME ?? "~"))
-      if (!isDirectory(candidate)) {
-        setDialog({ ...dialog, error: "That path is not a directory on this machine." })
-        return
-      }
-      if (state.workspaces.some((workspace) => workspace.path === candidate)) {
-        setDialog({ ...dialog, error: "That directory is already a workspace." })
-        return
-      }
-      close()
-      const workspace = createWorkspace(candidate, path.basename(candidate))
-      openSession(createSession(workspace.id).id)
-    }
-    return (
-      <DialogShell
-        title="Add a workspace"
-        description="The agent can read, edit, and run commands inside this directory and nowhere else."
-        onClose={close}
-      >
-        <TextField
-          testId="workspace-path"
-          value={dialog.value}
-          placeholder="/Users/you/projects/app"
-          onChange={(value) => setDialog({ ...dialog, value, error: null })}
-          onSubmit={submit}
-        />
-        {dialog.error ? <ErrorLine message={dialog.error} /> : null}
-        <Actions>
-          <Button label="Cancel" variant="ghost" onClick={close} />
-          <Button
-            label="Add workspace"
-            variant="primary"
-            testId="confirm-add-workspace"
-            onClick={submit}
-            hint="↩"
-          />
-        </Actions>
-      </DialogShell>
-    )
-  }
-
-  if (dialog.kind === "rename-session") {
-    const submit = () => {
-      const title = dialog.value.trim()
-      close()
-      if (title) updateSession(dialog.sessionId, (session) => ({ ...session, title }))
-    }
-    return (
-      <DialogShell
-        title="Rename this session"
-        description="The name shows in the sidebar, the palette, and the pane header."
-        onClose={close}
-      >
-        <TextField
-          testId="session-title"
-          value={dialog.value}
-          placeholder="What this session is about"
-          onChange={(value) => setDialog({ ...dialog, value })}
-          onSubmit={submit}
-        />
-        <Actions>
-          <Button label="Cancel" variant="ghost" onClick={close} />
-          <Button
-            label="Rename"
-            variant="primary"
-            testId="confirm-rename-session"
-            onClick={submit}
-            hint="↩"
-          />
-        </Actions>
-      </DialogShell>
-    )
-  }
-
-  if (dialog.kind === "delete-session") {
-    const session = findSession(state, dialog.sessionId)
-    return (
-      <DialogShell
-        title="Delete this session?"
-        description={`"${session?.title ?? "This session"}" and its saved history are removed. The files it changed are not touched.`}
-        onClose={close}
-      >
-        <Actions>
-          <Button label="Cancel" variant="ghost" onClick={close} />
-          <Button
-            label="Delete session"
-            variant="danger"
-            testId="confirm-delete-session"
-            onClick={() => {
-              close()
-              removeSession(dialog.sessionId)
-            }}
-          />
-        </Actions>
-      </DialogShell>
-    )
-  }
-
-  const workspace = findWorkspace(state, dialog.workspaceId)
-  const count = state.sessions.filter(
-    (session) => session.workspaceId === dialog.workspaceId,
-  ).length
-  return (
-    <DialogShell
-      title="Remove this workspace?"
-      description={`"${workspace?.name ?? "This workspace"}" and its ${count} session${count === 1 ? "" : "s"} are removed from fx. The directory on disk is not touched.`}
-      onClose={close}
-    >
-      <Actions>
-        <Button label="Cancel" variant="ghost" onClick={close} />
-        <Button
-          label="Remove workspace"
-          variant="danger"
-          testId="confirm-remove-workspace"
-          onClick={() => {
-            close()
-            removeWorkspace(dialog.workspaceId)
-          }}
-        />
-      </Actions>
-    </DialogShell>
-  )
-}

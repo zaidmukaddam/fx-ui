@@ -6,7 +6,7 @@ import { color, FONT, nativeTheme, radius, space, text } from "../../ui/theme"
 import { IconButton, Label, Thumbnail } from "../../ui/ui"
 import { openExternally } from "../../agent/oauth"
 import { removeMessage, type Message } from "../../store"
-import { GUTTER, HoldTail, Row } from "./shared"
+import { GUTTER, Gutter, HoldTail, Row } from "./shared"
 
 const IMAGE_SIZE = 80
 
@@ -191,21 +191,13 @@ export function Notice({
           hover: { backgroundColor: color.hover },
         }}
       >
-        <div
-          style={{
-            width: GUTTER - space.md,
-            flexShrink: 0,
-            display: "flex",
-            justifyContent: "center",
-            paddingTop: 3,
-          }}
-        >
+        <Gutter top={3}>
           <Icon
             name={message.tone === "error" ? "circleAlert" : "info"}
             size={11}
             color={tone}
           />
-        </div>
+        </Gutter>
         <text
           style={{
             flexGrow: 1,

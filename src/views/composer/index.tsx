@@ -1,14 +1,5 @@
 import { useState } from "react"
 
-import {
-  activeCommand,
-  activeMention,
-  applyMention,
-  rankFiles,
-  type Trigger,
-} from "../../workspace/files"
-import { listWorkspaceFiles } from "../../tools"
-import { loadSkills, type SkillCommand } from "../../workspace/skills"
 import { color, columnFor, FONT, nativeTheme, radius, space, text } from "../../ui/theme"
 import { IconButton, Thumbnail } from "../../ui/ui"
 import { setAttachments, useApp, type Session } from "../../store"
@@ -22,8 +13,8 @@ import {
   ModePicker,
   ModelPicker,
 } from "./pickers"
-import { MENTION_RESULTS, rank } from "./shared"
-import { TokenPicker, type Suggestion } from "./tokens"
+import { useTokenPicker } from "./picker"
+import { TokenPicker } from "./tokens"
 
 const PROMPT_ROW_HEIGHT = 15
 const PROMPT_LIFT = -6
@@ -62,10 +53,7 @@ export function Composer({
 }) {
   const { column, gutter } = columnFor(paneWidth)
   const [draft, setDraft] = useState("")
-  const [index, setIndex] = useState<{ root: string; files: string[] } | null>(null)
-  const [highlighted, setHighlighted] = useState(0)
-  const [dismissed, setDismissed] = useState(false)
-  const [commands, setCommands] = useState<SkillCommand[]>([])
+  const picker = useTokenPicker(draft, setDraft, root)
   const running = session.status === "running"
   const attached = useApp().attachments[session.id] ?? []
   const ready = (draft.trim().length > 0 || attached.length > 0) && !running
@@ -73,74 +61,16 @@ export function Composer({
   const tight = column < 340
   const oneRow = fitsOneRow(draft, column)
 
-  const files = index?.root === root ? index.files : null
-  const mention = dismissed ? null : activeMention(draft)
-  const command = dismissed ? null : activeCommand(draft)
-  const open: Trigger | null = mention ? "@" : command ? "/" : null
-
-  const suggestions: Suggestion[] =
-    open === "@"
-      ? files
-        ? rankFiles(files, mention!.query, MENTION_RESULTS).map((file) => ({
-            value: file,
-            label: file,
-            icon: "fileText" as const,
-          }))
-        : []
-      : open === "/"
-        ? rank(
-            commands.map((entry) => entry.name),
-            command!.query,
-            MENTION_RESULTS,
-          ).map((name) => ({
-            value: name,
-            label: `/${name}`,
-            detail: commands.find((entry) => entry.name === name)?.description,
-            icon: "sparkle" as const,
-          }))
-        : []
-
-  const empty =
-    open === "@"
-      ? files === null
-        ? "Reading the workspace…"
-        : mention?.query
-          ? `No file matches ${mention.query}`
-          : "No files in this workspace"
-      : command?.query
-        ? `No skill named ${command.query}`
-        : "No skills in this workspace"
-
-  const readWorkspace = () => {
-    void listWorkspaceFiles(root).then((found) => setIndex({ root, files: found }))
-  }
-  const readCommands = () => {
-    void loadSkills(root).then((loaded) => setCommands(loaded.commands))
-  }
-
-  const pick = (value: string) => {
-    setDraft(open === "/" ? `/${value} ` : applyMention(draft, value))
-    setHighlighted(0)
-  }
-
-  const attach = () => {
-    setDraft(draft.length === 0 || draft.endsWith(" ") ? `${draft}@` : `${draft} @`)
-    setDismissed(false)
-    setHighlighted(0)
-    readWorkspace()
-  }
-
   const submit = () => {
-    if (open && suggestions.length > 0) {
-      pick(suggestions[Math.min(highlighted, suggestions.length - 1)]!.value)
+    if (picker.open && picker.suggestions.length > 0) {
+      picker.pick(picker.suggestions[picker.highlighted]!.value)
       return
     }
     if (!ready) return
     onSend(draft, attached)
     setAttachments(session.id, [])
     setDraft("")
-    setDismissed(false)
-    setHighlighted(0)
+    picker.reset()
   }
 
   const sendAffordance = running ? (
@@ -167,20 +97,6 @@ export function Composer({
     />
   )
 
-  const onKeyDown = (event: { key?: string }) => {
-    if (!open) return
-    if (event.key === "escape") {
-      setDismissed(true)
-      return
-    }
-    if (suggestions.length === 0) return
-    if (event.key === "down") setHighlighted((at) => (at + 1) % suggestions.length)
-    else if (event.key === "up")
-      setHighlighted((at) => (at - 1 + suggestions.length) % suggestions.length)
-    else if (event.key === "tab")
-      pick(suggestions[Math.min(highlighted, suggestions.length - 1)]!.value)
-  }
-
   return (
     <div
       style={{
@@ -192,14 +108,14 @@ export function Composer({
         paddingBottom: space.lg,
       }}
     >
-      {open ? (
+      {picker.open ? (
         <div style={{ height: 0, minWidth: 0 }}>
           <div style={{ position: "absolute", bottom: space.xs, left: 0, right: 0 }}>
             <TokenPicker
-              suggestions={suggestions}
-              empty={empty}
-              highlighted={Math.min(highlighted, Math.max(0, suggestions.length - 1))}
-              onPick={pick}
+              suggestions={picker.suggestions}
+              empty={picker.empty}
+              highlighted={picker.highlighted}
+              onPick={picker.pick}
             />
           </div>
         </div>
@@ -281,24 +197,8 @@ export function Composer({
             maxRows={12}
             autoFocus
             theme={nativeTheme}
-            onChange={(event) => {
-              const next = event.value ?? ""
-              const before = activeMention(draft)
-              const after = activeMention(next)
-              const commandBefore = activeCommand(draft)
-              const commandAfter = activeCommand(next)
-              if (after && !before) readWorkspace()
-              if (commandAfter && !commandBefore) readCommands()
-              if (
-                after?.query !== before?.query ||
-                commandAfter?.query !== commandBefore?.query
-              ) {
-                setHighlighted(0)
-                if (!after && !commandAfter) setDismissed(false)
-              }
-              setDraft(next)
-            }}
-            onKeyDown={onKeyDown}
+            onChange={(event) => picker.onDraftChange(event.value ?? "")}
+            onKeyDown={picker.onKeyDown}
             onSubmit={submit}
             style={{
               flexGrow: 1,
@@ -327,7 +227,7 @@ export function Composer({
         <ModePicker session={session} />
         <div style={{ marginLeft: -2, flexShrink: 0 }}>
           {CAN_PICK_IMAGES ? (
-            <AttachMenu session={session} onMention={attach} />
+            <AttachMenu session={session} onMention={picker.attach} />
           ) : (
             <IconButton
               icon="plus"
@@ -336,7 +236,7 @@ export function Composer({
               testId="attach-file"
               tooltipSide="top"
               tooltipAlign="start"
-              onClick={attach}
+              onClick={picker.attach}
             />
           )}
         </div>

@@ -3,12 +3,11 @@ import path from "node:path"
 
 import { describeImage } from "../agent/providers"
 import { findSession, getState, sessionModel } from "../store"
-import { requestApproval } from "./approvals"
 import {
-  DENIED_PREFIX,
   defineTool,
-  field,
+  gate,
   optionalNumber,
+  optionalString,
   requireString,
   type HostTool,
   type ToolContext,
@@ -67,16 +66,10 @@ function vision(context: ToolContext): HostTool {
         },
         required: ["path"],
       },
-      parse: (input) => {
-        const question = field(input, "question")
-        return {
-          path: requireString(input, "path"),
-          question:
-            typeof question === "string" && question
-              ? question
-              : "Describe this image in detail.",
-        }
-      },
+      parse: (input) => ({
+        path: requireString(input, "path"),
+        question: optionalString(input, "question") || "Describe this image in detail.",
+      }),
       label: (input) => `${input.path} · ${input.question}`,
       run: async (input, ctx) => {
         const target = isAttachment(input.path)
@@ -191,15 +184,12 @@ function webSearch(context: ToolContext): HostTool {
           )
         }
 
-        const approved = await requestApproval({
-          sessionId: ctx.sessionId,
-          toolName: "web_search",
+        await gate(ctx, {
           title: "Search the web",
           detail: input.query,
           scope: "web:search",
-          routine: false,
+          denied: "the search was not run.",
         })
-        if (!approved) throw new Error(`${DENIED_PREFIX}: the search was not run.`)
 
         const response = await fetch(`${GATEWAY_URL}/chat/completions`, {
           method: "POST",
@@ -262,15 +252,12 @@ function webFetch(context: ToolContext): HostTool {
         if (url.protocol !== "http:" && url.protocol !== "https:") {
           throw new Error("Only http and https URLs can be fetched.")
         }
-        const approved = await requestApproval({
-          sessionId: ctx.sessionId,
-          toolName: "web_fetch",
+        await gate(ctx, {
           title: `Fetch ${url.host}`,
           detail: url.toString(),
           scope: `web:${url.host}`,
-          routine: false,
+          denied: `${url.host} was not fetched.`,
         })
-        if (!approved) throw new Error(`${DENIED_PREFIX}: ${url.host} was not fetched.`)
 
         const response = await fetch(url, {
           signal: ctx.signal,

@@ -2,11 +2,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 
 import { newId, setBackground, type BackgroundCommand } from "../store"
 import { capture } from "../workspace/run"
-import { requestApproval } from "./approvals"
 import {
-  DENIED_PREFIX,
   defineTool,
   field,
+  gate,
+  optionalString,
   requireString,
   type HostTool,
   type ToolContext,
@@ -146,18 +146,17 @@ export function shellTools(context: ToolContext): HostTool[] {
           const action = field(input, "action")
           const kind =
             action === "interact" || action === "stop" ? action : ("run" as const)
-          const handle = field(input, "handle")
-          const stdin = field(input, "input")
-          if (kind !== "run" && typeof handle !== "string") {
+          const handle = optionalString(input, "handle")
+          if (kind !== "run" && handle === undefined) {
             throw new Error(`\`handle\` is required for ${kind}.`)
           }
           return {
             action: kind,
             command: kind === "run" ? requireString(input, "command") : "",
-            cwd: typeof field(input, "cwd") === "string" ? (field(input, "cwd") as string) : ".",
+            cwd: optionalString(input, "cwd", "."),
             background: field(input, "background") === true,
-            handle: typeof handle === "string" ? handle : undefined,
-            input: typeof stdin === "string" ? stdin : undefined,
+            handle,
+            input: optionalString(input, "input"),
           }
         },
         label: (input) =>
@@ -195,16 +194,13 @@ export function shellTools(context: ToolContext): HostTool[] {
           const cwd = resolveInside(ctx.root, input.cwd)
           const program = input.command.trim().split(/\s+/)[0] ?? input.command
 
-          const approved = await requestApproval({
-            sessionId: ctx.sessionId,
-            toolName: "shell",
+          await gate(ctx, {
             title: input.background ? "Start a background command" : "Run a command",
             detail: input.command,
             language: "bash",
             scope: `cmd:${program}`,
-            routine: false,
+            denied: "the command was not run.",
           })
-          if (!approved) throw new Error(`${DENIED_PREFIX}: the command was not run.`)
 
           if (input.background) {
             const { handle, process } = startBackground(ctx.sessionId, input.command, cwd)

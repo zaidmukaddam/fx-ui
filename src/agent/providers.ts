@@ -1,20 +1,9 @@
 import { credential, PROVIDERS, type ProviderId } from "./oauth"
+import { dataOf, sseEvents, toResponsesRequest, translateStream, type Json } from "./responses"
 
 export const GATEWAY_LANGUAGE_MODEL_URL =
   "https://ai-gateway.vercel.sh/v3/ai/language-model"
 export const GATEWAY_MODELS_PATH = "/coding-agent/v1/models"
-
-const ENDPOINTS: Record<ProviderId, string> = {
-  grok: "https://cli-chat-proxy.grok.com/v1/responses",
-  codex: "https://chatgpt.com/backend-api/codex/responses",
-}
-
-const CATALOGUES: Record<ProviderId, string> = {
-  grok: "https://cli-chat-proxy.grok.com/v1/models",
-  codex: "https://chatgpt.com/backend-api/codex/models",
-}
-
-const GROK_MODALITIES = "https://api.x.ai/v1/language-models"
 
 export type ProviderModel = {
   id: string
@@ -87,11 +76,6 @@ function limitsFrom(provider: ProviderId, headers: Headers): PlanLimits | null {
 const CATALOGUE_TTL_MS = 10 * 60 * 1000
 const catalogues = new Map<ProviderId, { at: number; models: ProviderModel[] }>()
 
-const VERSION_URLS: Record<ProviderId, string> = {
-  codex: "https://registry.npmjs.org/@openai/codex/latest",
-  grok: "https://x.ai/cli/stable",
-}
-
 const versions = new Map<ProviderId, Promise<string | null>>()
 
 function clientVersion(
@@ -100,7 +84,7 @@ function clientVersion(
 ): Promise<string | null> {
   const known = versions.get(provider)
   if (known) return known
-  const asked = base(VERSION_URLS[provider])
+  const asked = base(PROVIDERS[provider].versionUrl)
     .then(async (response) => {
       if (!response.ok) return null
       if (provider === "grok") {
@@ -120,16 +104,13 @@ async function providerHeaders(
   auth: { token: string; accountId: string | null },
   base: typeof globalThis.fetch,
 ): Promise<Record<string, string>> {
-  const version = await clientVersion(provider, base)
+  const spec = PROVIDERS[provider]
+  const version = spec.versionHeader ? await clientVersion(provider, base) : null
   return {
     authorization: `Bearer ${auth.token}`,
     originator: "fx",
-    ...(provider === "grok"
-      ? {
-          "x-grok-client-identifier": "fx",
-          ...(version ? { "x-grok-client-version": version } : {}),
-        }
-      : {}),
+    ...spec.staticHeaders,
+    ...(version && spec.versionHeader ? { [spec.versionHeader]: version } : {}),
     ...(auth.accountId ? { "chatgpt-account-id": auth.accountId } : {}),
   }
 }
@@ -138,10 +119,11 @@ async function catalogueUrl(
   provider: ProviderId,
   base: typeof globalThis.fetch,
 ): Promise<string> {
-  if (provider !== "codex") return CATALOGUES[provider]
-  const version = await clientVersion("codex", base)
-  if (!version) throw new Error("Could not read the Codex client version from npm.")
-  return `${CATALOGUES.codex}?client_version=${encodeURIComponent(version)}`
+  const spec = PROVIDERS[provider]
+  if (!spec.versionedCatalogue) return spec.catalogue
+  const version = await clientVersion(provider, base)
+  if (!version) throw new Error(`Could not read the ${spec.label} client version from npm.`)
+  return `${spec.catalogue}?client_version=${encodeURIComponent(version)}`
 }
 
 export async function listProviderModels(
@@ -161,14 +143,14 @@ export async function listProviderModels(
   })
   if (!response.ok) throw new Error(`${PROVIDERS[provider].label} listed no models (HTTP ${response.status})`)
   const body = (await response.json()) as Json
-  const modalities =
-    provider === "grok"
-      ? await base(GROK_MODALITIES, {
-          headers: { authorization: `Bearer ${auth.token}`, accept: "application/json" },
-        })
-          .then((answer) => (answer.ok ? (answer.json() as Promise<Json>) : {}))
-          .catch(() => ({}))
-      : {}
+  const modalitiesUrl = PROVIDERS[provider].modalitiesUrl
+  const modalities = modalitiesUrl
+    ? await base(modalitiesUrl, {
+        headers: { authorization: `Bearer ${auth.token}`, accept: "application/json" },
+      })
+        .then((answer) => (answer.ok ? (answer.json() as Promise<Json>) : {}))
+        .catch(() => ({}))
+    : {}
   const models = parseCatalogue(provider, body, modalities)
   catalogues.set(provider, { at: Date.now(), models })
   return models
@@ -183,7 +165,7 @@ export function parseCatalogue(
   body: Json,
   modalityBody: Json = {},
 ): ProviderModel[] {
-  const rows = ((provider === "codex" ? body.models : body.data) as Json[] | undefined) ?? []
+  const rows = (body[PROVIDERS[provider].catalogueField] as Json[] | undefined) ?? []
   const modalities = new Map<string, string[]>()
   for (const entry of (modalityBody.models as Json[] | undefined) ?? []) {
     const row = entry as Json
@@ -295,249 +277,6 @@ export function bareModel(model: string): string {
   return model.replace(/^[a-z0-9-]+\//i, "")
 }
 
-type Json = Record<string, unknown>
-
-type PromptPart = {
-  type: string
-  text?: string
-  toolCallId?: string
-  toolName?: string
-  input?: unknown
-  output?: { type?: string; value?: unknown }
-}
-
-type PromptMessage = { role: string; content: string | PromptPart[] }
-
-function textOf(content: string | PromptPart[]): string {
-  if (typeof content === "string") return content
-  return content
-    .filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text)
-    .join("")
-}
-
-function outputText(part: PromptPart): string {
-  const value = part.output?.value
-  if (typeof value === "string") return value
-  return value === undefined ? "" : JSON.stringify(value)
-}
-
-export function toResponsesRequest(body: Json, model: string, route: Route = {}): Json {
-  const prompt = (body.prompt as PromptMessage[] | undefined) ?? []
-  const instructions: string[] = []
-  const input: Json[] = []
-
-  for (const message of prompt) {
-    if (message.role === "system") {
-      instructions.push(textOf(message.content))
-      continue
-    }
-    const parts = typeof message.content === "string"
-      ? [{ type: "text", text: message.content } as PromptPart]
-      : message.content
-
-    if (message.role === "tool") {
-      for (const part of parts) {
-        if (part.type !== "tool-result") continue
-        input.push({
-          type: "function_call_output",
-          call_id: part.toolCallId,
-          output: outputText(part),
-        })
-      }
-      continue
-    }
-
-    const said = textOf(parts)
-    if (said) {
-      input.push({
-        type: "message",
-        role: message.role,
-        content: [
-          {
-            type: message.role === "assistant" ? "output_text" : "input_text",
-            text: said,
-          },
-        ],
-      })
-    }
-    for (const part of parts) {
-      if (part.type !== "tool-call") continue
-      input.push({
-        type: "function_call",
-        call_id: part.toolCallId,
-        name: part.toolName,
-        arguments:
-          typeof part.input === "string" ? part.input : JSON.stringify(part.input ?? {}),
-      })
-    }
-  }
-
-  const tools: Json[] = ((body.tools as Json[] | undefined) ?? []).map((tool) => ({
-    type: "function",
-    name: tool.name,
-    description: tool.description ?? "",
-    parameters: tool.inputSchema ?? { type: "object", properties: {} },
-  }))
-  if (route.search) tools.push({ type: "web_search" })
-  if (route.search && route.provider === "grok") tools.push({ type: "x_search" })
-
-  const choice = (body.toolChoice as { type?: string } | undefined)?.type
-  return {
-    model,
-    ...(instructions.length > 0 ? { instructions: instructions.join("\n\n") } : {}),
-    input,
-    ...(tools.length > 0 ? { tools } : {}),
-    ...(choice === "required" || choice === "none" ? { tool_choice: choice } : {}),
-    ...(route.effort ? { reasoning: { effort: route.effort } } : {}),
-    ...(route.fast ? { service_tier: "priority" } : {}),
-    stream: true,
-    store: false,
-  }
-}
-
-const FINISH: Record<string, string> = {
-  completed: "stop",
-  incomplete: "length",
-  failed: "error",
-}
-
-function part(value: Json): string {
-  return `data: ${JSON.stringify(value)}\n\n`
-}
-
-type StreamState = {
-  open: Set<string>
-  calls: number
-  onSearch?: (step: SearchStep) => void
-}
-
-function newStreamState(onSearch?: (step: SearchStep) => void): StreamState {
-  return { open: new Set(), calls: 0, onSearch }
-}
-
-function isProviderSearch(item: Json | undefined): item is Json {
-  if (item?.type === "web_search_call") return true
-  return item?.type === "custom_tool_call" && String(item.name ?? "").startsWith("x_")
-}
-
-function searchStep(item: Json, done: boolean): SearchStep {
-  if (item.type === "custom_tool_call") {
-    let input: Json = {}
-    try {
-      input = JSON.parse(String(item.input || "{}")) as Json
-    } catch {}
-    return {
-      id: String(item.id ?? ""),
-      done,
-      action: "x_search",
-      label: typeof input.query === "string" ? input.query : "",
-      sources: [],
-    }
-  }
-  const action = (item.action as Json | undefined) ?? {}
-  const query = typeof action.query === "string" ? action.query : ""
-  const url = typeof action.url === "string" ? action.url : ""
-  const sources = Array.isArray(action.sources)
-    ? action.sources
-        .map((entry) => String((entry as Json)?.url ?? ""))
-        .filter(Boolean)
-    : []
-  return {
-    id: String(item.id ?? ""),
-    done,
-    action: typeof action.type === "string" ? action.type : "search",
-    label: query || url,
-    sources,
-  }
-}
-
-function translateEvent(event: Json, state: StreamState): string[] {
-  const type = String(event.type ?? "")
-  const open = state.open
-  const out: string[] = []
-
-  if (type === "response.output_text.delta" && event.delta) {
-    out.push(part({ type: "text-delta", delta: String(event.delta) }))
-  } else if (type === "response.reasoning_summary_text.delta" && event.delta) {
-    out.push(part({ type: "reasoning-delta", delta: String(event.delta) }))
-  } else if (type === "response.output_item.added") {
-    const item = event.item as Json | undefined
-    if (item?.type === "function_call") {
-      const id = String(item.call_id ?? item.id ?? "")
-      if (id) {
-        open.add(id)
-        out.push(part({ type: "tool-input-start", id, toolName: String(item.name ?? "") }))
-      }
-    } else if (isProviderSearch(item)) {
-      state.onSearch?.(searchStep(item, false))
-    }
-  } else if (type === "response.function_call_arguments.delta") {
-    const id = String(event.item_id ?? "")
-    if (open.has(id) && event.delta) {
-      out.push(part({ type: "tool-input-delta", id, delta: String(event.delta) }))
-    }
-  } else if (type === "response.output_item.done") {
-    const item = event.item as Json | undefined
-    if (item?.type === "function_call") {
-      const id = String(item.call_id ?? item.id ?? "")
-      const args = String(item.arguments ?? "{}")
-      if (open.has(id)) {
-        out.push(part({ type: "tool-input-end", id }))
-        open.delete(id)
-      }
-      let input: unknown = {}
-      try {
-        input = JSON.parse(args || "{}")
-      } catch {
-        input = {}
-      }
-      state.calls += 1
-      out.push(
-        part({ type: "tool-call", toolCallId: id, toolName: String(item.name ?? ""), input }),
-      )
-    } else if (isProviderSearch(item)) {
-      state.onSearch?.(searchStep(item, true))
-    }
-  } else if (type === "response.completed" || type === "response.incomplete" || type === "response.failed") {
-    const response = (event.response as Json | undefined) ?? {}
-    const usage = (response.usage as Json | undefined) ?? {}
-    const inputDetails = (usage.input_tokens_details as Json | undefined) ?? {}
-    const outputDetails = (usage.output_tokens_details as Json | undefined) ?? {}
-    const reason =
-      state.calls > 0 && type === "response.completed"
-        ? "tool-calls"
-        : (FINISH[type.slice("response.".length)] ?? "stop")
-    out.push(
-      part({
-        type: "finish",
-        finishReason: { unified: reason },
-        usage: {
-          inputTokens: {
-            total: Number(usage.input_tokens ?? 0),
-            cacheRead: Number(inputDetails.cached_tokens ?? 0),
-          },
-          outputTokens: {
-            total: Number(usage.output_tokens ?? 0),
-            reasoning: Number(outputDetails.reasoning_tokens ?? 0),
-          },
-        },
-      }),
-    )
-  } else if (type === "error") {
-    out.push(part({ type: "error", error: event.error ?? event }))
-  }
-  return out
-}
-
-function dataOf(frame: string): string {
-  return frame
-    .split("\n")
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trim())
-    .join("")
-}
-
 function totalOf(count: unknown): number {
   const value = typeof count === "object" && count ? (count as Json).total : count
   return typeof value === "number" ? value : 0
@@ -572,64 +311,6 @@ function watchUsage(response: Response, onUsage?: (tokens: number) => void): Res
   })
 }
 
-function translateStream(
-  source: ReadableStream<Uint8Array>,
-  onSearch?: (step: SearchStep) => void,
-): ReadableStream<Uint8Array> {
-  const decoder = new TextDecoder()
-  const encoder = new TextEncoder()
-  const state = newStreamState(onSearch)
-  let buffer = ""
-  let finished = false
-
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const reader = source.getReader()
-      const emit = (text: string) => controller.enqueue(encoder.encode(text))
-      try {
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          let split = buffer.indexOf("\n\n")
-          while (split >= 0) {
-            const data = dataOf(buffer.slice(0, split))
-            buffer = buffer.slice(split + 2)
-            if (data && data !== "[DONE]") {
-              try {
-                const event = JSON.parse(data) as Json
-                for (const line of translateEvent(event, state)) {
-                  if (line.includes('"finish"')) finished = true
-                  emit(line)
-                }
-              } catch {
-              }
-            }
-            split = buffer.indexOf("\n\n")
-          }
-        }
-        if (!finished) {
-          emit(part({ type: "finish", finishReason: { unified: "stop" } }))
-        }
-        emit("data: [DONE]\n\n")
-        controller.close()
-      } catch (error) {
-        emit(
-          part({
-            type: "error",
-            error: { message: error instanceof Error ? error.message : String(error) },
-          }),
-        )
-        emit(part({ type: "finish", finishReason: { unified: "error" } }))
-        emit("data: [DONE]\n\n")
-        controller.close()
-      } finally {
-        reader.releaseLock()
-      }
-    },
-  })
-}
-
 export async function describeImage(
   provider: ProviderId,
   model: string,
@@ -641,7 +322,7 @@ export async function describeImage(
   const auth = await credential(provider)
   if (!auth) throw new Error(`Not signed in to ${PROVIDERS[provider].label}.`)
 
-  const response = await base(ENDPOINTS[provider], {
+  const response = await base(PROVIDERS[provider].endpoint, {
     method: "POST",
     headers: {
       ...(await providerHeaders(provider, auth, base)),
@@ -675,27 +356,10 @@ export async function describeImage(
     )
   }
 
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
   let text = ""
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let split = buffer.indexOf("\n\n")
-    while (split >= 0) {
-      const data = dataOf(buffer.slice(0, split))
-      buffer = buffer.slice(split + 2)
-      if (data && data !== "[DONE]") {
-        try {
-          const event = JSON.parse(data) as Json
-          if (event.type === "response.output_text.delta" && event.delta) {
-            text += String(event.delta)
-          }
-        } catch {}
-      }
-      split = buffer.indexOf("\n\n")
+  for await (const event of sseEvents(response.body)) {
+    if (event.type === "response.output_text.delta" && event.delta) {
+      text += String(event.delta)
     }
   }
   return text.trim()
@@ -736,7 +400,7 @@ export function providerFetch(
       typeof init?.body === "string" ? init.body : Buffer.from(init?.body as never).toString("utf8"),
     ) as Json
 
-    const response = await base(ENDPOINTS[provider], {
+    const response = await base(PROVIDERS[provider].endpoint, {
       method: "POST",
       headers: {
         ...(await providerHeaders(provider, auth, base)),
@@ -765,13 +429,10 @@ export function providerFetch(
       )
     }
 
-    return watchUsage(
-      new Response(translateStream(response.body, route.onSearch), {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
-      route.onUsage,
-    )
+    return new Response(translateStream(response.body, route), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })
   }
   return Object.assign(shim, { preconnect: base.preconnect?.bind(base) }) as typeof fetch
 }

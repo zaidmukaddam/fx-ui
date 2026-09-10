@@ -16,6 +16,7 @@ import {
   findWorkspace,
   getState,
   newId,
+  notice,
   removeMessage,
   sessionModel,
   setSettings,
@@ -35,7 +36,7 @@ import { backing } from "./backing"
 import { imageBlock, mentionBlocks } from "../workspace/files"
 import { type ProviderId } from "./oauth"
 import { refreshGitStatus } from "../workspace/git"
-import { loadSkills, splitCommand } from "../workspace/skills"
+import { loadSkills, splitCommand, type SkillCommand } from "../workspace/skills"
 import { acquireMcp, resetMcp, type McpLease } from "../workspace/mcp"
 
 type Runtime = {
@@ -44,6 +45,8 @@ type Runtime = {
   provider: ProviderId | null
   effort: string | null
   fast: boolean
+  search: boolean
+  commands: SkillCommand[]
   turn: Turn | null
   mcp: McpLease
 }
@@ -229,31 +232,21 @@ async function runtimeFor(sessionId: string): Promise<Runtime> {
   if (
     existing &&
     existing.model === session.model &&
-    existing.provider === (session.provider ?? null) &&
-    existing.effort === (session.effort ?? null) &&
-    existing.fast === (session.fast ?? false)
+    existing.provider === session.provider &&
+    existing.effort === session.effort &&
+    existing.fast === session.fast &&
+    existing.search === back.search
   ) {
     return existing
   }
-  if (existing) {
-    await saveCheckpoint(sessionId, existing.agent)
-    await existing.agent.close()
-    await existing.mcp.release()
-    runtimes.delete(sessionId)
-  }
+  if (existing) await disposeRuntime(sessionId, existing, { checkpoint: true })
 
   const [skills, mcp] = await Promise.all([loadSkills(workspace.path), acquireMcp()])
   for (const problem of [
     ...skills.problems.map((entry) => `Skill ${path.basename(entry.file)}: ${entry.reason}`),
     ...mcp.problems.map((entry) => `MCP server ${entry.server}: ${entry.reason}`),
   ]) {
-    appendMessage(sessionId, {
-      id: newId(),
-      kind: "notice",
-      at: Date.now(),
-      tone: "error",
-      text: problem,
-    })
+    notice(sessionId, "error", problem)
   }
 
   const toolContext = { sessionId, root: workspace.path, search: back.search }
@@ -293,21 +286,17 @@ async function runtimeFor(sessionId: string): Promise<Runtime> {
       skills.names.length > 0 ? `skills: ${skills.names.join(", ")}` : "",
       mcp.names.length > 0 ? `MCP: ${mcp.names.join(", ")}` : "",
     ].filter(Boolean)
-    appendMessage(sessionId, {
-      id: newId(),
-      kind: "notice",
-      at: Date.now(),
-      tone: "info",
-      text: `Loaded ${loaded.join(" · ")}`,
-    })
+    notice(sessionId, "info", `Loaded ${loaded.join(" · ")}`)
   }
 
   const runtime: Runtime = {
     agent,
     model: session.model,
-    provider: session.provider ?? null,
-    effort: session.effort ?? null,
-    fast: session.fast ?? false,
+    provider: session.provider,
+    effort: session.effort,
+    fast: session.fast,
+    search: back.search,
+    commands: skills.commands,
     turn: null,
     mcp,
   }
@@ -457,17 +446,10 @@ export async function send(
       ? mentionBlocks(workspace.path, trimmed)
       : { blocks: [], problems: [] }
     for (const problem of problems) {
-      appendMessage(sessionId, {
-        id: newId(),
-        kind: "notice",
-        at: Date.now(),
-        tone: "error",
-        text: `@${problem.path} ${problem.reason}, so it was not attached.`,
-      })
+      notice(sessionId, "error", `@${problem.path} ${problem.reason}, so it was not attached.`)
     }
 
-    const skills = workspace ? await loadSkills(workspace.path) : null
-    const invoked = skills ? splitCommand(trimmed, skills.commands) : null
+    const invoked = splitCommand(trimmed, runtime.commands)
     const text = invoked
       ? [invoked.command.instructions, invoked.rest].filter(Boolean).join("\n\n")
       : trimmed
@@ -492,38 +474,18 @@ export async function send(
     const failure = result.stopReason === "refused" ? failedRequest(sessionId) : null
     if (failure) {
       removeMessage(sessionId, failure.id)
-      appendMessage(sessionId, {
-        id: newId(),
-        kind: "notice",
-        at: Date.now(),
-        tone: "error",
-        text: failure.text,
-      })
+      notice(sessionId, "error", failure.text)
     }
 
-    const notice = failure || endedInDenial(sessionId) ? null : noticeText(result.stopReason)
-    if (notice) {
-      appendMessage(sessionId, {
-        id: newId(),
-        kind: "notice",
-        at: Date.now(),
-        tone: "info",
-        text: notice,
-      })
-    }
+    const outcome = failure || endedInDenial(sessionId) ? null : noticeText(result.stopReason)
+    if (outcome) notice(sessionId, "info", outcome)
     updateSession(sessionId, (session) => ({ ...session, status: "idle" }))
     await saveCheckpoint(sessionId, runtime.agent)
   } catch (error) {
     stream.flush()
     const message =
       error instanceof Error ? error.message : "The turn failed for an unknown reason."
-    appendMessage(sessionId, {
-      id: newId(),
-      kind: "notice",
-      at: Date.now(),
-      tone: "error",
-      text: message,
-    })
+    notice(sessionId, "error", message)
     updateSession(sessionId, (session) => ({ ...session, status: "error" }))
     if (error instanceof MissingApiKeyError) setSettings(true)
   } finally {
@@ -558,25 +520,32 @@ export async function reloadSkills(): Promise<void> {
   ].filter(Boolean)
   await mcp.release()
 
-  appendMessage(focused, {
-    id: newId(),
-    kind: "notice",
-    at: Date.now(),
-    tone: skills.problems.length > 0 || mcp.problems.length > 0 ? "error" : "info",
-    text: [
+  notice(
+    focused,
+    skills.problems.length > 0 || mcp.problems.length > 0 ? "error" : "info",
+    [
       found.length > 0 ? `Reloaded ${found.join(" · ")}` : "Reloaded: nothing configured",
       ...skills.problems.map((entry) => `${path.basename(entry.file)}: ${entry.reason}`),
       ...mcp.problems.map((entry) => `${entry.server}: ${entry.reason}`),
     ].join("\n"),
-  })
+  )
+}
+
+async function disposeRuntime(
+  sessionId: string,
+  runtime: Runtime,
+  options: { checkpoint: boolean },
+): Promise<void> {
+  runtimes.delete(sessionId)
+  if (options.checkpoint) await saveCheckpoint(sessionId, runtime.agent)
+  await runtime.agent.close()
+  await runtime.mcp.release()
 }
 
 export async function closeSession(sessionId: string): Promise<void> {
   const runtime = runtimes.get(sessionId)
   if (!runtime) return
-  runtimes.delete(sessionId)
-  await runtime.agent.close()
-  await runtime.mcp.release()
+  await disposeRuntime(sessionId, runtime, { checkpoint: false })
   forgetToolResults(sessionId)
   forgetEdits(sessionId)
   stopBackgroundCommands(sessionId)
@@ -592,11 +561,9 @@ export async function restartAgents(options: { skipRunning?: boolean } = {}): Pr
       .sessions.filter((session) => session.status === "running")
       .map((session) => session.id),
   )
-  for (const [sessionId, runtime] of [...runtimes]) {
-    if (options.skipRunning && running.has(sessionId)) continue
-    await saveCheckpoint(sessionId, runtime.agent)
-    await runtime.agent.close()
-    await runtime.mcp.release()
-    runtimes.delete(sessionId)
-  }
+  await Promise.all(
+    [...runtimes]
+      .filter(([sessionId]) => !(options.skipRunning && running.has(sessionId)))
+      .map(([sessionId, runtime]) => disposeRuntime(sessionId, runtime, { checkpoint: true })),
+  )
 }

@@ -4,7 +4,7 @@ import { Icon, type IconName } from "../../ui/icons"
 import { color, nativeTheme, radius, space, text } from "../../ui/theme"
 import { Label } from "../../ui/ui"
 import { type Message } from "../../store"
-import { COLLAPSED_LINES, GUTTER, HoldTail, Row } from "./shared"
+import { COLLAPSED_LINES, GUTTER, Gutter, HoldTail, Row } from "./shared"
 
 const TOOL_ICONS: Record<string, IconName> = {
   ask_user_question: "message",
@@ -98,20 +98,13 @@ export function ToolResult({
           hover: hasBody ? { backgroundColor: color.hover } : undefined,
         }}
       >
-        <div
-          style={{
-            width: GUTTER - space.md,
-            flexShrink: 0,
-            display: "flex",
-            justifyContent: "center",
-          }}
-        >
+        <Gutter>
           <Icon
             name={TOOL_ICONS[message.name] ?? "box"}
             size={12}
             color={message.state === "error" ? color.danger : color.faint}
           />
-        </div>
+        </Gutter>
         <Label size={text.small} color={nameColor}>
           {message.name}
         </Label>

@@ -1,8 +1,6 @@
-import { createServer } from "node:http"
-import { createHash, randomBytes } from "node:crypto"
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
+import { dedupe, jsonStore, loopbackCallback, pkce, postForm, postJson } from "../oauth-core"
 import { capture } from "../workspace/run"
 import { DIR } from "../store"
 
@@ -20,6 +18,15 @@ type ProviderSpec = {
   authorizeExtras: Record<string, string>
   refresh: "form" | "json"
   corsOrigin?: string
+  endpoint: string
+  catalogue: string
+  catalogueField: "models" | "data"
+  versionedCatalogue: boolean
+  modalitiesUrl: string | null
+  versionUrl: string
+  versionHeader: string | null
+  staticHeaders: Record<string, string>
+  searchTools: string[]
 }
 
 export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
@@ -35,6 +42,15 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     authorizeExtras: { referrer: "fx" },
     refresh: "form",
     corsOrigin: "https://accounts.x.ai",
+    endpoint: "https://cli-chat-proxy.grok.com/v1/responses",
+    catalogue: "https://cli-chat-proxy.grok.com/v1/models",
+    catalogueField: "data",
+    versionedCatalogue: false,
+    modalitiesUrl: "https://api.x.ai/v1/language-models",
+    versionUrl: "https://x.ai/cli/stable",
+    versionHeader: "x-grok-client-version",
+    staticHeaders: { "x-grok-client-identifier": "fx" },
+    searchTools: ["web_search", "x_search"],
   },
   codex: {
     label: "Codex",
@@ -51,6 +67,15 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
       originator: "fx",
     },
     refresh: "json",
+    endpoint: "https://chatgpt.com/backend-api/codex/responses",
+    catalogue: "https://chatgpt.com/backend-api/codex/models",
+    catalogueField: "models",
+    versionedCatalogue: true,
+    modalitiesUrl: null,
+    versionUrl: "https://registry.npmjs.org/@openai/codex/latest",
+    versionHeader: null,
+    staticHeaders: {},
+    searchTools: ["web_search"],
   },
 }
 
@@ -62,44 +87,28 @@ export type Session = {
   account: string | null
 }
 
-const FILE = path.join(DIR, "providers.json")
+const store = jsonStore<Partial<Record<ProviderId, Session>>>(path.join(DIR, "providers.json"), {})
 
 const REFRESH_MARGIN_MS = 120_000
 const LOGIN_TIMEOUT_MS = 300_000
 
-function readStore(): Partial<Record<ProviderId, Session>> {
-  try {
-    return JSON.parse(readFileSync(FILE, "utf8")) as Partial<Record<ProviderId, Session>>
-  } catch {
-    return {}
-  }
-}
-
-function writeStore(store: Partial<Record<ProviderId, Session>>): void {
-  mkdirSync(DIR, { recursive: true })
-  const staging = `${FILE}.${process.pid}`
-  writeFileSync(staging, JSON.stringify(store, null, 2), { mode: 0o600 })
-  chmodSync(staging, 0o600)
-  renameSync(staging, FILE)
-}
-
 export function storedSession(provider: ProviderId): Session | null {
-  return readStore()[provider] ?? null
+  return store.read()[provider] ?? null
 }
 
 export function signedIn(): ProviderId[] {
-  const store = readStore()
-  return (Object.keys(PROVIDERS) as ProviderId[]).filter((id) => store[id])
+  const current = store.read()
+  return (Object.keys(PROVIDERS) as ProviderId[]).filter((id) => current[id])
 }
 
 export function signOut(provider: ProviderId): void {
-  const store = readStore()
-  delete store[provider]
-  writeStore(store)
+  const current = store.read()
+  delete current[provider]
+  store.write(current)
 }
 
 function save(provider: ProviderId, session: Session): void {
-  writeStore({ ...readStore(), [provider]: session })
+  store.write({ ...store.read(), [provider]: session })
 }
 
 function accountFromIdToken(idToken: string | undefined): {
@@ -136,35 +145,6 @@ function sessionFromTokenResponse(body: Record<string, unknown>, previous?: Sess
   }
 }
 
-async function post(
-  url: string,
-  contentType: string,
-  body: string,
-): Promise<Record<string, unknown>> {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": contentType, accept: "application/json" },
-    body,
-  })
-  const text = await response.text()
-  if (!response.ok) {
-    throw new Error(`${new URL(url).host} answered HTTP ${response.status}: ${text.slice(0, 300)}`)
-  }
-  return JSON.parse(text) as Record<string, unknown>
-}
-
-function postForm(url: string, form: Record<string, string>): Promise<Record<string, unknown>> {
-  return post(url, "application/x-www-form-urlencoded", new URLSearchParams(form).toString())
-}
-
-function postJson(url: string, body: Record<string, string>): Promise<Record<string, unknown>> {
-  return post(url, "application/json", JSON.stringify(body))
-}
-
-function base64url(bytes: Buffer): string {
-  return bytes.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-}
-
 export async function openExternally(url: string): Promise<void> {
   const opener =
     process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open"
@@ -172,84 +152,6 @@ export async function openExternally(url: string): Promise<void> {
     await capture(opener, [url], { timeoutMs: 10_000 })
   } catch {
   }
-}
-
-function awaitCallback(spec: ProviderSpec): Promise<{
-  port: number
-  code: Promise<{ code: string; state: string }>
-  close: () => void
-}> {
-  return new Promise((resolve, reject) => {
-    let settle: (value: { code: string; state: string }) => void
-    let fail: (error: Error) => void
-    const code = new Promise<{ code: string; state: string }>((ok, no) => {
-      settle = ok
-      fail = no
-    })
-
-    const server = createServer((request, response) => {
-      const url = new URL(request.url ?? "/", "http://127.0.0.1")
-      const allowed =
-        spec.corsOrigin && request.headers.origin === spec.corsOrigin ? spec.corsOrigin : null
-      if (url.pathname !== spec.callbackPath) {
-        response.writeHead(404).end()
-        return
-      }
-      if (request.method === "OPTIONS") {
-        response
-          .writeHead(204, {
-            ...(allowed ? { "access-control-allow-origin": allowed } : {}),
-            "access-control-allow-methods": "GET",
-            "access-control-allow-private-network": "true",
-            vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Private-Network",
-          })
-          .end()
-        return
-      }
-      const error = url.searchParams.get("error")
-      const received = url.searchParams.get("code")
-      response.writeHead(200, {
-        "content-type": "text/html; charset=utf-8",
-        ...(allowed ? { "access-control-allow-origin": allowed, vary: "Origin" } : {}),
-      })
-      response.end(
-        `<!doctype html><meta charset="utf-8"><title>fx-ui</title>` +
-          `<body style="font:14px ui-monospace,monospace;background:#000;color:#ededed;padding:48px">` +
-          (error || !received
-            ? `Sign-in failed: ${error ?? "no code returned"}.`
-            : `Signed in to ${spec.label}. You can close this tab.`) +
-          `</body>`,
-      )
-      if (error || !received) fail(new Error(error ?? "the provider returned no code"))
-      else settle({ code: received, state: url.searchParams.get("state") ?? "" })
-    })
-
-    server.on("error", reject)
-    const close = () => server.close()
-    const listenOn = (index: number) => {
-      const port = spec.ports.length > 0 ? spec.ports[index] : 0
-      if (port === undefined) {
-        reject(
-          new Error(
-            `${spec.label} redirects only to ports ${spec.ports.join(", ")}, and all are in use.`,
-          ),
-        )
-        return
-      }
-      server.once("error", () => {
-        if (spec.ports.length > 0) listenOn(index + 1)
-      })
-      server.listen(port, "127.0.0.1", () => {
-        const address = server.address()
-        if (address === null || typeof address === "string") {
-          reject(new Error("the callback listener reported no port"))
-          return
-        }
-        resolve({ port: address.port, code, close })
-      })
-    }
-    listenOn(0)
-  })
 }
 
 export type PendingSignIn = {
@@ -283,11 +185,9 @@ export function authorizeUrl(
 
 export async function beginSignIn(provider: ProviderId): Promise<PendingSignIn> {
   const spec = PROVIDERS[provider]
-  const verifier = base64url(randomBytes(32))
-  const challenge = base64url(createHash("sha256").update(verifier).digest())
-  const state = base64url(randomBytes(16))
+  const { verifier, challenge, state } = pkce()
 
-  const listener = await awaitCallback(spec)
+  const listener = await loopbackCallback(spec)
   const redirectUri = `http://${spec.redirectHost}:${listener.port}${spec.callbackPath}`
   const authorize = authorizeUrl(provider, redirectUri, challenge, state)
 
@@ -337,7 +237,7 @@ export async function signIn(provider: ProviderId): Promise<string> {
   return flow.completed
 }
 
-const refreshing = new Map<ProviderId, Promise<{ token: string; accountId: string | null }>>()
+const dedupeRefresh = dedupe<ProviderId, { token: string; accountId: string | null }>()
 
 export async function credential(
   provider: ProviderId,
@@ -352,11 +252,9 @@ export async function credential(
       `The ${PROVIDERS[provider].label} sign-in expired and cannot refresh. Sign in again.`,
     )
   }
-  const pending = refreshing.get(provider)
-  if (pending) return pending
-
   const refreshToken = session.refreshToken
-  const refresh = (async () => {
+
+  return dedupeRefresh(provider, async () => {
     const spec = PROVIDERS[provider]
     const form = {
       grant_type: "refresh_token",
@@ -373,7 +271,5 @@ export async function credential(
     }
     save(provider, refreshed)
     return { token: refreshed.accessToken, accountId: refreshed.accountId }
-  })().finally(() => refreshing.delete(provider))
-  refreshing.set(provider, refresh)
-  return refresh
+  })
 }

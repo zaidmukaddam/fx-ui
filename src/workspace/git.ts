@@ -3,7 +3,6 @@ import { capture, isMissingProgram } from "./run"
 import { findWorkspace, getState, setState } from "../store"
 
 const GIT_TIMEOUT_MS = 10_000
-const MAX_GIT_CHARS = 24_000
 
 export type GitStatus = {
   branch: string
@@ -82,7 +81,7 @@ export async function gitDiff(
   const result = await git(root, args, options.signal)
   if (!result) throw new Error("git is not installed, so there is no diff to read.")
   if (result.code !== 0) throw new Error(gitError(result.stderr))
-  return clip(result.stdout)
+  return result.stdout
 }
 
 export async function gitLog(
@@ -101,7 +100,7 @@ export async function gitLog(
   const result = await git(root, args, options.signal)
   if (!result) throw new Error("git is not installed, so there is no history to read.")
   if (result.code !== 0) throw new Error(gitError(result.stderr))
-  return clip(result.stdout)
+  return result.stdout
 }
 
 export function summarise(status: GitStatus): string {
@@ -131,10 +130,4 @@ export async function refreshGitStatus(workspaceId: string): Promise<void> {
 function gitError(stderr: string): string {
   const first = stderr.trim().split("\n")[0] ?? "git failed"
   return first.replace(/^fatal:\s*/, "")
-}
-
-function clip(value: string): string {
-  if (value.length <= MAX_GIT_CHARS) return value
-  const dropped = value.length - MAX_GIT_CHARS
-  return `${value.slice(0, MAX_GIT_CHARS)}\n… ${dropped.toLocaleString()} more characters truncated`
 }

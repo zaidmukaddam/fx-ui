@@ -7,7 +7,8 @@ import { cancel, closeAll, send } from "./src/agent/agent"
 import { stopAllBackgroundCommands } from "./src/tools"
 import { refreshCredentials } from "./src/agent/credentials"
 import { Composer } from "./src/views/composer"
-import { CommandPalette, Dialogs } from "./src/views/palette"
+import { CommandPalette } from "./src/views/palette"
+import { Dialogs } from "./src/views/dialogs"
 import { SettingsPage } from "./src/views/settings"
 import { Sidebar, SIDEBAR_WIDTH } from "./src/views/sidebar"
 import {
@@ -25,17 +26,17 @@ import { isClean, refreshGitStatus, summarise } from "./src/workspace/git"
 import { CAN_PICK_IMAGES, pasteImage } from "./src/workspace/images"
 import { useMountEffect } from "./src/ui/hooks"
 import {
-  createSession,
   findSession,
   findWorkspace,
   flushState,
   getState,
-  openSession,
   setDialog,
+  setOverlay,
   setPalette,
   setSettings,
   setSplit,
   setState,
+  startSession,
   useApp,
   type AppState,
 } from "./src/store"
@@ -313,15 +314,11 @@ export function onWindowKeyDown(event: EventPayload): void {
   const state = getState()
 
   if (event.key === "escape") {
-    if (state.dialog) {
-      setDialog(null)
+    if (state.overlay) {
+      setOverlay(null)
       return
     }
-    if (state.settingsOpen) {
-      setSettings(false)
-      return
-    }
-    if (state.paletteOpen) setPalette(false)
+    if (state.settingsOpen) setSettings(false)
     return
   }
   if (!event.modifiers?.cmd) return
@@ -330,14 +327,14 @@ export function onWindowKeyDown(event: EventPayload): void {
 
   switch (event.key) {
     case "k":
-      setPalette(!state.paletteOpen)
+      setPalette(state.overlay?.kind !== "palette")
       return
     case ",":
       setSettings(!state.settingsOpen)
       return
     case "n": {
       const workspaceId = state.activeWorkspaceId ?? state.workspaces[0]?.id
-      if (workspaceId) openSession(createSession(workspaceId).id)
+      if (workspaceId) startSession(workspaceId)
       else setDialog({ kind: "add-workspace", value: process.cwd(), error: null })
       return
     }
@@ -496,7 +493,7 @@ export function FxApp() {
           </anchored>
         ) : null}
 
-        {state.paletteOpen ? <CommandPalette state={state} /> : null}
+        {state.overlay?.kind === "palette" ? <CommandPalette state={state} /> : null}
         <Dialogs state={state} />
 
         {dragging ? (

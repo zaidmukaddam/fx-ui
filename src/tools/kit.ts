@@ -1,6 +1,6 @@
 import { appendMessage, newId, patchMessage } from "../store"
 import { type SearchStep } from "../agent/providers"
-import { requestApproval } from "./approvals"
+import { requestApproval, type ApprovalRequest } from "./approvals"
 
 export type JsonValue =
   | string
@@ -42,11 +42,28 @@ export type ToolSpec<Input> = {
   label: (input: Input) => string
   run: (
     input: Input,
-    context: ToolContext & { signal: AbortSignal },
+    context: ToolContext & { signal: AbortSignal; name: string },
   ) => Promise<ToolOutput>
 }
 
 export const DENIED_PREFIX = "Denied by the user"
+
+export async function gate(
+  ctx: ToolContext & { name: string },
+  ask: Omit<ApprovalRequest, "sessionId" | "toolName" | "routine"> & {
+    routine?: boolean
+    denied: string
+  },
+): Promise<void> {
+  const { denied, routine, ...rest } = ask
+  const allowed = await requestApproval({
+    ...rest,
+    routine: routine ?? false,
+    sessionId: ctx.sessionId,
+    toolName: ctx.name,
+  })
+  if (!allowed) throw new Error(`${DENIED_PREFIX}: ${denied}`)
+}
 
 export const MAX_OUTPUT_CHARS = 24_000
 
@@ -69,6 +86,19 @@ export function requireString(input: unknown, key: string): string {
   if (typeof value !== "string" || value === "") {
     throw new Error(`\`${key}\` is required and must be a non-empty string.`)
   }
+  return value
+}
+
+export function optionalString(input: unknown, key: string): string | undefined
+export function optionalString(input: unknown, key: string, fallback: string): string
+export function optionalString(
+  input: unknown,
+  key: string,
+  fallback?: string,
+): string | undefined {
+  const value = field(input, key)
+  if (value === undefined || value === null) return fallback
+  if (typeof value !== "string") throw new Error(`\`${key}\` must be a string.`)
   return value
 }
 
@@ -128,7 +158,7 @@ export function defineTool<Input>(
       try {
         const input = spec.parse(rawInput)
         patchMessage(context.sessionId, messageId, { label: spec.label(input) })
-        const result = await spec.run(input, { ...context, signal })
+        const result = await spec.run(input, { ...context, signal, name: spec.name })
         patchMessage(context.sessionId, messageId, {
           state: "ok",
           ...(result.label ? { label: result.label } : {}),
@@ -179,15 +209,12 @@ export function adopt(
       label: summarise,
       run: async (input, ctx) => {
         if (approval) {
-          const allowed = await requestApproval({
-            sessionId: ctx.sessionId,
-            toolName: tool.name,
+          await gate(ctx, {
             title: approval.title,
             detail: summarise(input),
             scope: approval.scope,
-            routine: false,
+            denied: `${tool.name} was not run.`,
           })
-          if (!allowed) throw new Error(`${DENIED_PREFIX}: ${tool.name} was not run.`)
         }
         return { text: textOf(await tool.execute(input, { signal: ctx.signal })) }
       },

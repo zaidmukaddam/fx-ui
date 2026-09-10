@@ -1,4 +1,3 @@
-import { useState } from "react"
 import { Select, SelectContent, SelectTrigger } from "@gpuix/react/select"
 
 import { color, radius, space, text } from "../../ui/theme"
@@ -68,7 +67,6 @@ function LimitRow({ limit }: { limit: Limit }) {
 }
 
 export function ContextMeter({ session }: { session: Session }) {
-  const [open, setOpen] = useState(false)
   const state = useApp()
   const capacity = sessionModel(state, session)?.contextWindow
   const plan = session.provider ? state.limits[session.provider] : undefined
@@ -87,7 +85,7 @@ export function ContextMeter({ session }: { session: Session }) {
   ].filter((part) => part.tokens > 0)
 
   return (
-    <Select open={open} onOpenChange={setOpen} value="context" onValueChange={() => {}}>
+    <Select value="context" onValueChange={() => {}}>
       <SelectTrigger asChild>
         <div
           testId="context-meter"
