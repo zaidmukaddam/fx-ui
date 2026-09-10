@@ -513,3 +513,12 @@ reads bash's profile, not zsh's, so Homebrew's tools and anything an MCP server
 starts through `npx` would be missing. Outside a terminal the app asks the login
 shell for its `PATH` at startup (`$SHELL -ilc`, with a five-second limit) and
 uses that.
+
+### The compiled binary runs under the hardened runtime with Bun's JIT entitlements
+
+Notarization requires the hardened runtime. Signed with it and
+`scripts/entitlements.plist` (JIT, unsigned executable memory, no executable
+page protection, no library validation, dyld environment variables), the window
+opened and a libfx agent started, the addon included: Bun unpacks an embedded
+`.node` file and loads it, which library validation would refuse for a file not
+signed by the same team.

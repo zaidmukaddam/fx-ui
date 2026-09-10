@@ -25,7 +25,31 @@ jobs:
           fi
       - run: bun run typecheck
       - run: bun run test
-      - run: bun run package
+      - name: Import the Developer ID certificate
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/certificate.p12"
+      - name: Package, sign and notarize
+        env:
+          SIGN_IDENTITY: "Developer ID Application: Zaid Altaf Mukaddam (8BN7M8YM4J)"
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          export NOTARY_KEY="$RUNNER_TEMP/AuthKey.p8"
+          echo "$ASC_PRIVATE_KEY" | base64 --decode > "$NOTARY_KEY"
+          bun run package
+          rm "$NOTARY_KEY"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

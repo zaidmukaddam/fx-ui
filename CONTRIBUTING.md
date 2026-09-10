@@ -52,9 +52,25 @@ git push origin v0.1.0
 ```
 
 The Release workflow checks that the tag matches `package.json`, runs the
-checks, builds the DMG with `bun run package` and publishes it as a GitHub
-release. The app is signed ad hoc and not notarized, so macOS asks people to
-allow it in Privacy & Security the first time they open it.
+checks, then builds, signs and notarizes the DMG with `bun run package` and
+publishes it as a GitHub release. It needs these repository secrets:
+
+| Secret | What it holds |
+| --- | --- |
+| `MACOS_CERTIFICATE` | The Developer ID Application certificate and key, exported as `.p12`, in base64 |
+| `MACOS_CERTIFICATE_PASSWORD` | The password the `.p12` was exported with |
+| `ASC_KEY_ID` | The ID of an App Store Connect API key with the Developer role |
+| `ASC_ISSUER_ID` | The issuer ID shown above the keys in App Store Connect |
+| `ASC_PRIVATE_KEY` | That key's `.p8` file, in base64 |
+
+`bun run package` on its own signs ad hoc. To sign and notarize locally, store
+the notary credentials in your keychain once, then name the identity and the
+profile:
+
+```bash
+xcrun notarytool store-credentials fx-notary --apple-id <apple-id> --team-id 8BN7M8YM4J
+SIGN_IDENTITY="Developer ID Application: Zaid Altaf Mukaddam (8BN7M8YM4J)" NOTARY_PROFILE=fx-notary bun run package
+```
 
 ## Reporting a bug
 

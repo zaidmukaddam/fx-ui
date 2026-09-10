@@ -8,6 +8,24 @@ const dist = path.join(root, "dist")
 const app = path.join(dist, "fx.app")
 const contents = path.join(app, "Contents")
 const icon = path.join(root, "assets", "icon.png")
+const identity = process.env.SIGN_IDENTITY ?? "-"
+const entitlements = path.join(import.meta.dir, "entitlements.plist")
+
+const notary = process.env.NOTARY_PROFILE
+  ? ["--keychain-profile", process.env.NOTARY_PROFILE]
+  : process.env.NOTARY_KEY && process.env.NOTARY_KEY_ID && process.env.NOTARY_ISSUER
+    ? [
+        "--key",
+        process.env.NOTARY_KEY,
+        "--key-id",
+        process.env.NOTARY_KEY_ID,
+        "--issuer",
+        process.env.NOTARY_ISSUER,
+      ]
+    : null
+if (notary && identity === "-") {
+  throw new Error("Notarizing needs SIGN_IDENTITY set to a Developer ID Application identity")
+}
 
 await $`bun run build`.cwd(root)
 
@@ -47,7 +65,8 @@ writeFileSync(
 `,
 )
 
-await $`codesign --force --sign - ${app}`.quiet()
+const hardened = identity === "-" ? [] : ["--options", "runtime", "--timestamp"]
+await $`codesign --force --sign ${identity} ${hardened} --entitlements ${entitlements} ${app}`.quiet()
 
 const stage = path.join(dist, "dmg")
 const dmg = path.join(dist, `fx-${pkg.version}.dmg`)
@@ -58,5 +77,21 @@ symlinkSync("/Applications", path.join(stage, "Applications"))
 rmSync(dmg, { force: true })
 await $`hdiutil create -volname fx -srcfolder ${stage} -ov -format UDZO ${dmg}`.quiet()
 rmSync(stage, { recursive: true })
+if (identity !== "-") await $`codesign --force --sign ${identity} --timestamp ${dmg}`.quiet()
 
-console.log(`[package] wrote ${path.relative(root, app)} and ${path.relative(root, dmg)}`)
+if (notary) {
+  console.log("[package] notarizing, this usually takes a few minutes")
+  const result = (await $`xcrun notarytool submit ${dmg} ${notary} --wait --output-format json`
+    .nothrow()
+    .json()) as { id?: string; status?: string }
+  if (result.status !== "Accepted") {
+    if (result.id) await $`xcrun notarytool log ${result.id} ${notary}`.nothrow()
+    throw new Error(`Notarization ended with status ${result.status ?? "unknown"}`)
+  }
+  await $`xcrun stapler staple ${dmg}`.quiet()
+}
+
+console.log(
+  `[package] wrote ${path.relative(root, app)} and ${path.relative(root, dmg)}` +
+    (identity === "-" ? ", signed ad hoc" : notary ? ", signed and notarized" : ", signed"),
+)
