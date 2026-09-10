@@ -456,7 +456,7 @@ type StartsOn = Pick<
   "model" | "modelName" | "provider" | "effort" | "fast" | "mode"
 >
 
-function answerable(current: AppState, provider: "grok" | "codex" | null): boolean {
+export function answerable(current: AppState, provider: "grok" | "codex" | null): boolean {
   return provider !== null || apiKeySource(current) !== "none"
 }
 

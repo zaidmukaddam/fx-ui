@@ -3462,6 +3462,80 @@ describeNative("fx app", () => {
     openSession(createSession(workspace.id).id, 0)
     setState((current) => ({
       ...current,
+      apiKey: "vck_test",
+      models: [
+        { id: "grok-4.6", name: "Grok 4.6 · Grok", provider: "grok" },
+        { id: "openai/gpt-4o", name: "GPT-4o" },
+      ],
+    }))
+
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String((input as Request)?.url ?? input)
+      if (url.includes("ai-gateway.vercel.sh")) return Response.json({ data: [] })
+      return realFetch(input as RequestInfo)
+    }) as unknown as typeof fetch
+
+    try {
+      const { renderer, app } = await mount(1100, 700)
+      await app.getByTestId("model-picker").click()
+      await settle()
+      renderer.flush()
+
+      const painted = renderer.getPaintedText().join("\n")
+      expect(painted).toContain("Grok 4.6 · Grok")
+      expect(painted).not.toContain("grok:grok-4.6")
+      expect(painted).toContain("openai/gpt-4o")
+
+      await app.close()
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+
+  it("scrolls the model list instead of squashing it", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    openSession(createSession(workspace.id).id, 0)
+    setState((current) => ({
+      ...current,
+      apiKey: "vck_test",
+      models: Array.from({ length: 40 }, (_, index) => ({
+        id: `vendor/model-${index}`,
+        name: `Model ${index}`,
+      })),
+    }))
+
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String((input as Request)?.url ?? input)
+      if (url.includes("ai-gateway.vercel.sh")) return Response.json({ data: [] })
+      return realFetch(input as RequestInfo)
+    }) as unknown as typeof fetch
+
+    try {
+      const { app } = await mount(1100, 700)
+      await app.getByTestId("model-picker").click()
+      await settle()
+
+      const first = await app.getByTestId("model-vendor/model-0").bounds()
+      const second = await app.getByTestId("model-vendor/model-1").bounds()
+      expect(first.height).toBe(28)
+      expect(second.y - first.y).toBe(28)
+
+      expect(await app.getByTestId("model-vendor/model-30").count()).toBe(1)
+
+      await app.close()
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+
+  it("hides Gateway models from the picker once the key is gone", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    openSession(createSession(workspace.id).id, 0)
+    setState((current) => ({
+      ...current,
+      apiKey: null,
       models: [
         { id: "grok-4.6", name: "Grok 4.6 · Grok", provider: "grok" },
         { id: "openai/gpt-4o", name: "GPT-4o" },
@@ -3475,33 +3549,7 @@ describeNative("fx app", () => {
 
     const painted = renderer.getPaintedText().join("\n")
     expect(painted).toContain("Grok 4.6 · Grok")
-    expect(painted).not.toContain("grok:grok-4.6")
-    expect(painted).toContain("openai/gpt-4o")
-
-    await app.close()
-  })
-
-  it("scrolls the model list instead of squashing it", async () => {
-    const workspace = createWorkspace(tempDir(), "demo")
-    openSession(createSession(workspace.id).id, 0)
-    setState((current) => ({
-      ...current,
-      models: Array.from({ length: 40 }, (_, index) => ({
-        id: `vendor/model-${index}`,
-        name: `Model ${index}`,
-      })),
-    }))
-
-    const { app } = await mount(1100, 700)
-    await app.getByTestId("model-picker").click()
-    await settle()
-
-    const first = await app.getByTestId("model-vendor/model-0").bounds()
-    const second = await app.getByTestId("model-vendor/model-1").bounds()
-    expect(first.height).toBe(28)
-    expect(second.y - first.y).toBe(28)
-
-    expect(await app.getByTestId("model-vendor/model-30").count()).toBe(1)
+    expect(painted).not.toContain("GPT-4o")
 
     await app.close()
   })
