@@ -12,6 +12,8 @@ import { Backdrop, Kbd, Label, fieldStyle, overlayStyle } from "../ui/ui"
 import { cancel, reloadSkills } from "../agent/agent"
 import { setUseCli, signInWithFx } from "../agent/credentials"
 import { forgetGrants, lastEdit, undoLastEdit } from "../tools"
+import { lastTurn, restoreTurn } from "../workspace/turns"
+import { refreshGitStatus } from "../workspace/git"
 import {
   clearNotices,
   findSession,
@@ -123,6 +125,26 @@ function buildCommands(state: AppState): Command[] {
         } catch (error) {
           notice(focused, "error", error instanceof Error ? error.message : String(error))
         }
+      },
+    })
+  }
+  const restored = focused ? lastTurn(focused) : null
+  if (focused && restored) {
+    commands.push({
+      id: "restore-turn",
+      label: restored === 1 ? "Restore this turn's file" : `Restore this turn's ${restored} files`,
+      detail: "Puts the workspace back as it was before the turn, if nothing has changed it since",
+      icon: "history",
+      run: () => {
+        const workspaceId = findSession(state, focused)?.workspaceId
+        void restoreTurn(focused)
+          .then((text) => {
+            notice(focused, "info", text)
+            if (workspaceId) void refreshGitStatus(workspaceId)
+          })
+          .catch((error) => {
+            notice(focused, "error", error instanceof Error ? error.message : String(error))
+          })
       },
     })
   }

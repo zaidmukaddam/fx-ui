@@ -1,5 +1,5 @@
 
-import { capture, isMissingProgram } from "./run"
+import { capture, isMissingProgram, type Captured } from "./run"
 import { findWorkspace, getState, setState } from "../store"
 
 const GIT_TIMEOUT_MS = 10_000
@@ -17,21 +17,30 @@ export function isClean(status: GitStatus): boolean {
   return status.staged + status.unstaged + status.untracked === 0
 }
 
-async function git(
+export async function runGit(
   root: string,
   args: string[],
-  signal?: AbortSignal,
-): Promise<{ stdout: string; stderr: string; code: number } | null> {
+  options: { signal?: AbortSignal; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+): Promise<Captured | null> {
   try {
     return await capture("git", args, {
       cwd: root,
-      signal,
-      timeoutMs: GIT_TIMEOUT_MS,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS,
+      env: options.env,
     })
   } catch (error) {
     if (isMissingProgram(error)) return null
     throw error
   }
+}
+
+async function git(
+  root: string,
+  args: string[],
+  signal?: AbortSignal,
+): Promise<Captured | null> {
+  return runGit(root, args, { signal })
 }
 
 export async function gitStatus(
