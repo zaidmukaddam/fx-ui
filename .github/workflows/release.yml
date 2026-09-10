@@ -32,13 +32,16 @@ jobs:
         run: |
           keychain="$RUNNER_TEMP/signing.keychain-db"
           echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
           security create-keychain -p "" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "" "$keychain"
-          security import "$RUNNER_TEMP/certificate.p12" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$CERTIFICATE_PASSWORD" -A -f pkcs12 -k "$keychain"
           security set-key-partition-list -S apple-tool:,apple: -k "" "$keychain" > /dev/null
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/certificate.p12"
+          security find-identity -v -p codesigning "$keychain" | tee /dev/stderr | grep -q "Developer ID Application"
       - name: Package, sign and notarize
         env:
           SIGN_IDENTITY: "Developer ID Application: Zaid Altaf Mukaddam (8BN7M8YM4J)"
