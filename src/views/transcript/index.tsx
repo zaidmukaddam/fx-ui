@@ -32,18 +32,28 @@ function gapBefore(message: Message, previous: Message | undefined): number {
   return dense ? space.xs : space.xl
 }
 
+function endsTurn(rows: Message[], index: number, running: boolean): boolean {
+  for (const next of rows.slice(index + 1)) {
+    if (next.kind === "user") return true
+    if (next.kind !== "notice") return false
+  }
+  return !running
+}
+
 const MessageRow = memo(function MessageRow({
   sessionId,
   message,
+  copyable,
 }: {
   sessionId: string
   message: Message
+  copyable: boolean
 }) {
   switch (message.kind) {
     case "user":
       return <UserMessage message={message} />
     case "assistant":
-      return <AssistantMessage message={message} />
+      return <AssistantMessage message={message} copyable={copyable} />
     case "tool":
       return <ToolResult message={message} />
     case "approval":
@@ -129,7 +139,14 @@ export function Transcript({
                 : null),
             }}
           >
-            <MessageRow sessionId={session.id} message={message} />
+            <MessageRow
+              sessionId={session.id}
+              message={message}
+              copyable={
+                message.kind === "assistant" &&
+                endsTurn(rows, index, session.status === "running")
+              }
+            />
           </div>
         ))}
       </virtual-list>

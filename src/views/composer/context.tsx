@@ -4,6 +4,7 @@ import { Select, SelectContent, SelectTrigger } from "@gpuix/react/select"
 import { color, radius, space, text } from "../../ui/theme"
 import { Label, overlayStyle } from "../../ui/ui"
 import { sessionModel, useApp, type Session } from "../../store"
+import type { Limit } from "../../agent/providers"
 
 const RING_SIZE = 14
 const RING_RADIUS = 6
@@ -17,9 +18,60 @@ function ring(share: number): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="2.5"><circle cx="8" cy="8" r="${RING_RADIUS}" stroke-opacity="0.3"/><circle cx="8" cy="8" r="${RING_RADIUS}" stroke-dasharray="${drawn.toFixed(2)} ${circumference.toFixed(2)}" transform="rotate(-90 8 8)"/></svg>`
 }
 
+function resetIn(at: number): string {
+  const minutes = Math.max(0, Math.round((at - Date.now()) / 60_000))
+  if (minutes >= 1440) {
+    return `Resets in ${Math.floor(minutes / 1440)}d ${Math.floor((minutes % 1440) / 60)}h`
+  }
+  if (minutes >= 60) return `Resets in ${Math.floor(minutes / 60)}h ${minutes % 60}m`
+  return `Resets in ${minutes}m`
+}
+
+function LimitRow({ limit }: { limit: Limit }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+      <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: space.md }}>
+        <Label grow size={text.small} color={color.secondary}>
+          {limit.label}
+        </Label>
+        <Label size={text.small} color={color.tertiary}>
+          {`${limit.usedPercent}% used`}
+        </Label>
+      </div>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          height: 4,
+          borderRadius: 2,
+          backgroundColor: color.border,
+        }}
+      >
+        <div
+          style={{
+            width: 0,
+            flexGrow: limit.usedPercent,
+            borderRadius: 2,
+            backgroundColor:
+              limit.usedPercent >= NEARLY_FULL * 100 ? color.danger : color.secondary,
+          }}
+        />
+        <div style={{ width: 0, flexGrow: Math.max(0, 100 - limit.usedPercent) }} />
+      </div>
+      {limit.resetsAt ? (
+        <Label size={text.micro} color={color.tertiary}>
+          {resetIn(limit.resetsAt)}
+        </Label>
+      ) : null}
+    </div>
+  )
+}
+
 export function ContextMeter({ session }: { session: Session }) {
   const [open, setOpen] = useState(false)
-  const capacity = sessionModel(useApp(), session)?.contextWindow
+  const state = useApp()
+  const capacity = sessionModel(state, session)?.contextWindow
+  const plan = session.provider ? state.limits[session.provider] : undefined
   const { used, system, tools, mcp, skills } = session.context
   if (used === 0) return null
 
@@ -129,6 +181,33 @@ export function ContextMeter({ session }: { session: Session }) {
             </div>
           ))}
         </div>
+
+        {plan ? (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: space.sm,
+              paddingTop: space.md,
+              borderTopWidth: 1,
+              borderColor: color.border,
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: space.md }}>
+              <Label grow size={text.small} color={color.text}>
+                Plan usage
+              </Label>
+              {plan.plan ? (
+                <Label size={text.small} color={color.tertiary}>
+                  {`${plan.plan[0]!.toUpperCase()}${plan.plan.slice(1)}`}
+                </Label>
+              ) : null}
+            </div>
+            {plan.limits.map((limit) => (
+              <LimitRow key={limit.label} limit={limit} />
+            ))}
+          </div>
+        ) : null}
       </SelectContent>
     </Select>
   )

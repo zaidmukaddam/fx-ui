@@ -150,9 +150,26 @@ function PaneHeader({
             <Label size={text.small} color={color.ghost}>
               /
             </Label>
-            <Label truncate size={text.body} color={focused ? color.text : color.faint}>
-              {session.title}
-            </Label>
+            <div
+              testId={`session-title-${index}`}
+              onClick={() =>
+                setDialog({ kind: "rename-session", sessionId: session.id, value: session.title })
+              }
+              style={{
+                display: "flex",
+                minWidth: 0,
+                flexShrink: 1,
+                paddingLeft: space.xs,
+                paddingRight: space.xs,
+                borderRadius: radius.sm,
+                cursor: "pointer",
+                hover: { backgroundColor: color.hover },
+              }}
+            >
+              <Label truncate size={text.body} color={focused ? color.text : color.faint}>
+                {session.title}
+              </Label>
+            </div>
           </>
         ) : (
           <Label size={text.body} color={color.ghost}>

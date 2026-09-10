@@ -2147,6 +2147,66 @@ describeNative("fx app", () => {
     }
   })
 
+  it("lists what a session may do without asking, and forgets it", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    updateSession(session.id, (current) => ({ ...current, grants: ["cmd:git", "write"] }))
+    const { renderer, app } = await mount()
+
+    await app.getByTestId("permission-mode").click()
+    const painted = renderer.getPaintedText().join("\n")
+    expect(painted).toContain("Allowed without asking")
+    expect(painted).toContain("Run git")
+    expect(painted).toContain("Edit and create files")
+
+    await app.getByTestId("forget-grant-cmd:git").click()
+    expect(findSession(getState(), session.id)?.grants).toEqual(["write"])
+    await app.close()
+  })
+
+  it("renames a session from its title in the pane header", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    const { app } = await mount()
+
+    await app.getByTestId("session-title-0").click()
+    await app.getByTestId("session-title").fill("Tokenizer work")
+    await app.getByTestId("confirm-rename-session").click()
+
+    expect(findSession(getState(), session.id)?.title).toBe("Tokenizer work")
+    expect(getState().dialog).toBeNull()
+    await app.close()
+  })
+
+  it("offers to copy the answer that ends a turn, not the words before a tool", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    appendMessage(session.id, { id: "ask", kind: "user", at: Date.now(), text: "what is in here" })
+    appendMessage(session.id, {
+      id: "between",
+      kind: "assistant",
+      at: Date.now(),
+      text: "looking.",
+      reasoning: "",
+    })
+    toolRow(session.id, "list", "one.txt")
+    appendMessage(session.id, {
+      id: "answer",
+      kind: "assistant",
+      at: Date.now(),
+      text: "one file.",
+      reasoning: "",
+    })
+    const { renderer, app } = await mount()
+
+    await app.getByTestId("copy-answer").waitFor()
+    expect(renderer.findByTestId("copy-between")).toBeUndefined()
+    await app.close()
+  })
+
   function isNaming(init?: RequestInit): boolean {
     const body =
       typeof init?.body === "string"
@@ -2656,6 +2716,83 @@ describeNative("fx app", () => {
       globalThis.fetch = realFetch
       rmSync(path.join(DIR, "providers.json"), { force: true })
     }
+  })
+
+  it("shows the plan's usage from the headers of the last reply", async () => {
+    mkdirSync(DIR, { recursive: true })
+    writeFileSync(
+      path.join(DIR, "providers.json"),
+      JSON.stringify({
+        codex: {
+          accessToken: "tok",
+          refreshToken: "r",
+          expiresAt: Date.now() + 3_600_000,
+          accountId: "acct",
+          account: "someone@example.com",
+        },
+      }),
+    )
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    setState((current) => ({
+      ...current,
+      apiKey: null,
+      models: [
+        {
+          id: "gpt-6-astra",
+          name: "GPT-6-Astra",
+          provider: "codex",
+          efforts: [],
+          vision: false,
+          contextWindow: 272_000,
+        },
+      ],
+    }))
+    updateSession(session.id, (current) => ({ ...current, model: "gpt-6-astra", provider: "codex" }))
+
+    const resetAt = Math.floor(Date.now() / 1000) + 2 * 86_400 + 600
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String((input as Request)?.url ?? input)
+      if (!url.endsWith("/responses")) return Response.json({ models: [] })
+      return new Response(
+        `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "done." })}\n\n` +
+          `data: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 1_000, output_tokens: 10 } } })}\n\n` +
+          "data: [DONE]\n\n",
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+            "x-codex-plan-type": "pro",
+            "x-codex-primary-used-percent": "47",
+            "x-codex-primary-window-minutes": "10080",
+            "x-codex-primary-reset-at": String(resetAt),
+            "x-codex-secondary-used-percent": "0",
+            "x-codex-secondary-window-minutes": "0",
+          },
+        },
+      )
+    }) as unknown as typeof fetch
+    try {
+      await send(session.id, "hello")
+    } finally {
+      globalThis.fetch = realFetch
+      rmSync(path.join(DIR, "providers.json"), { force: true })
+    }
+
+    expect(getState().limits.codex).toEqual({
+      plan: "pro",
+      limits: [{ label: "Weekly limit", usedPercent: 47, resetsAt: resetAt * 1000 }],
+    })
+    const { renderer, app } = await mount()
+    await app.getByTestId("context-meter").click()
+    const painted = renderer.getPaintedText().join("\n")
+    expect(painted).toContain("Plan usage")
+    expect(painted).toContain("Pro")
+    expect(painted).toContain("47% used")
+    expect(painted).toContain("Resets in 2d 0h")
+    await app.close()
   })
 
   it("keeps one store when a hot reload evaluates the module again", async () => {

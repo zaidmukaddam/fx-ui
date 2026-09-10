@@ -53,6 +53,13 @@ function scopeOfApproval(sessionId: string, approvalId: string): string {
   return message?.kind === "approval" ? message.scope : ""
 }
 
+export function forgetGrants(sessionId: string, scope?: string): void {
+  updateSession(sessionId, (session) => ({
+    ...session,
+    grants: scope ? session.grants.filter((grant) => grant !== scope) : [],
+  }))
+}
+
 export function denyPendingApprovals(sessionId: string): void {
   const session = findSession(getState(), sessionId)
   if (!session) return

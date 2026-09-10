@@ -10,7 +10,7 @@ import {
 import { Icon } from "../../ui/icons"
 import { color, radius, space, text } from "../../ui/theme"
 import { Button, EffortDial, Explain, Label, overlayStyle } from "../../ui/ui"
-import { stopBackgroundCommand } from "../../tools"
+import { forgetGrants, stopBackgroundCommand } from "../../tools"
 import { attachImages, chooseImages, pasteImage } from "../../workspace/images"
 import {
   DEFAULT_MODEL,
@@ -222,6 +222,17 @@ export function BackgroundChip({ session }: { session: Session }) {
   )
 }
 
+function grantLabel(scope: string): string {
+  if (scope === "write") return "Edit and create files"
+  if (scope === "install_skill") return "Install skills"
+  if (scope === "web:search") return "Search the web"
+  const [, kind, target] = /^(cmd|web|mcp):(.+)$/.exec(scope) ?? []
+  if (kind === "cmd") return `Run ${target}`
+  if (kind === "web") return `Fetch from ${target}`
+  if (kind === "mcp") return `Use ${target} tools`
+  return scope
+}
+
 export function ModePicker({ session }: { session: Session }) {
   const current = MODES.find((mode) => mode.value === session.mode) ?? MODES[0]!
 
@@ -256,6 +267,9 @@ export function ModePicker({ session }: { session: Session }) {
           <Label size={text.micro} color={color.tertiary}>
             {current.label}
           </Label>
+          {session.grants.length > 0 ? (
+            <Icon name="shieldAlert" size={11} color={color.ghost} />
+          ) : null}
           <Icon name="chevronDown" size={11} color={color.ghost} />
         </div>
       </SelectTrigger>
@@ -264,7 +278,7 @@ export function ModePicker({ session }: { session: Session }) {
         side="top"
         align="start"
         sideOffset={8}
-        style={{ ...overlayStyle(space.xs, space.xs), width: 260 }}
+        style={{ ...overlayStyle(space.xs, space.xs), width: 300 }}
       >
         {MODES.map((mode) => (
           <SelectItem
@@ -311,6 +325,64 @@ export function ModePicker({ session }: { session: Session }) {
             )}
           </SelectItem>
         ))}
+        {session.grants.length > 0 ? (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 1,
+              marginTop: space.xs,
+              paddingTop: space.xs,
+              borderTopWidth: 1,
+              borderColor: color.border,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: space.md,
+                paddingLeft: space.md,
+              }}
+            >
+              <Label grow size={text.micro} color={color.tertiary}>
+                Allowed without asking
+              </Label>
+              <Button
+                label="Forget all"
+                size="sm"
+                variant="ghost"
+                testId="forget-grants"
+                onClick={() => forgetGrants(session.id)}
+              />
+            </div>
+            {session.grants.map((scope) => (
+              <div
+                key={scope}
+                style={{
+                  display: "flex",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: space.md,
+                  paddingLeft: space.md,
+                  minWidth: 0,
+                }}
+              >
+                <Label grow truncate size={text.small} color={color.text}>
+                  {grantLabel(scope)}
+                </Label>
+                <Button
+                  label="Forget"
+                  size="sm"
+                  variant="ghost"
+                  testId={`forget-grant-${scope}`}
+                  onClick={() => forgetGrants(session.id, scope)}
+                />
+              </div>
+            ))}
+          </div>
+        ) : null}
       </SelectContent>
     </Select>
   )

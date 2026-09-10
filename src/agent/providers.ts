@@ -43,6 +43,45 @@ export type Route = {
   search?: boolean
   onSearch?: (step: SearchStep) => void
   onUsage?: (tokens: number) => void
+  onLimits?: (limits: PlanLimits) => void
+}
+
+export type Limit = { label: string; usedPercent: number; resetsAt: number | null }
+
+export type PlanLimits = { plan: string | null; limits: Limit[] }
+
+const WINDOW_LABELS: Record<number, string> = { 300: "5-hour limit", 10080: "Weekly limit" }
+
+function limitsFrom(provider: ProviderId, headers: Headers): PlanLimits | null {
+  const limits: Limit[] =
+    provider === "codex"
+      ? ["primary", "secondary"].flatMap((window) => {
+          const minutes = Number(headers.get(`x-codex-${window}-window-minutes`))
+          const used = Number(headers.get(`x-codex-${window}-used-percent`))
+          if (!minutes || !Number.isFinite(used)) return []
+          const reset = Number(headers.get(`x-codex-${window}-reset-at`))
+          return [
+            {
+              label: WINDOW_LABELS[minutes] ?? `${Math.round(minutes / 60)}-hour limit`,
+              usedPercent: used,
+              resetsAt: reset ? reset * 1000 : null,
+            },
+          ]
+        })
+      : ["requests", "tokens"].flatMap((kind) => {
+          const limit = Number(headers.get(`x-ratelimit-limit-${kind}`))
+          const remaining = Number(headers.get(`x-ratelimit-remaining-${kind}`))
+          if (!limit || !Number.isFinite(remaining)) return []
+          return [
+            {
+              label: kind === "requests" ? "Requests" : "Tokens",
+              usedPercent: Math.round(100 * (1 - remaining / limit)),
+              resetsAt: null,
+            },
+          ]
+        })
+  if (limits.length === 0) return null
+  return { plan: provider === "codex" ? headers.get("x-codex-plan-type") : null, limits }
 }
 
 const CATALOGUE_TTL_MS = 10 * 60 * 1000
@@ -708,6 +747,9 @@ export function providerFetch(
       body: JSON.stringify(toResponsesRequest(body, bareModel(model), route)),
       signal: init?.signal ?? undefined,
     })
+
+    const limits = limitsFrom(provider, response.headers)
+    if (limits) route.onLimits?.(limits)
 
     if (!response.ok || !response.body) {
       const detail = await response.text().catch(() => "")

@@ -40,7 +40,10 @@ bun run dev
   derive. Opening a session is how you leave it.
 - **Approvals.** Writes and commands stop and ask, with the diff or the exact
   command line in front of you. The three answers mirror fx's own prompt: yes,
-  yes and don't ask again, no.
+  yes and don't ask again, no. What a session may now do without asking is
+  listed under the permission mode in the composer footer, which shows a shield
+  while there is any, and each entry can be forgotten there. *Forget what this
+  session may do without asking* in the palette clears them all.
 - **Permission modes.** `ask`, `auto`, and `full access`, mapped from
   [fx's modes](https://fx.sh/docs/configure-fx/permissions). `auto` runs edits
   and still asks before a command.
@@ -102,7 +105,9 @@ bun run dev
   estimate at four characters a token, and whatever it leaves over counts as
   messages. It replaces a running count of every token billed, which grew with
   each tool call and said nothing about how close the conversation was to the
-  limit.
+  limit. On a subscription the popover also shows the plan's usage, read off
+  the headers of every reply: Codex sends the plan and each usage window with
+  when it resets, Grok its requests and tokens left.
 - **Skills.** fx's own live in `.fx/skills` in the workspace and in
   `~/.fx-ui/skills`, and go into the prompt whole. Skills written for Claude
   Code and Codex are picked up too: `.claude/skills/<name>/SKILL.md` and

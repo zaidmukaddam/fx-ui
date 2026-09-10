@@ -20,7 +20,7 @@ import {
 } from "../ui/ui"
 import { cancel, reloadSkills } from "../agent/agent"
 import { setUseCli, signInWithFx } from "../agent/credentials"
-import { isDirectory, lastEdit, undoLastEdit } from "../tools"
+import { forgetGrants, isDirectory, lastEdit, undoLastEdit } from "../tools"
 import {
   appendMessage,
   clearNotices,
@@ -37,6 +37,7 @@ import {
   setSettings,
   setSplit,
   setState,
+  updateSession,
   type AppState,
 } from "../store"
 import path from "node:path"
@@ -195,6 +196,22 @@ function buildCommands(state: AppState): Command[] {
     })
   }
   if (focused) {
+    const session = findSession(state, focused)
+    commands.push({
+      id: "rename-session",
+      label: "Rename this session",
+      icon: "filePen",
+      run: () =>
+        setDialog({ kind: "rename-session", sessionId: focused, value: session?.title ?? "" }),
+    })
+    if (session && session.grants.length > 0) {
+      commands.push({
+        id: "forget-grants",
+        label: "Forget what this session may do without asking",
+        icon: "shieldAlert",
+        run: () => forgetGrants(focused),
+      })
+    }
     commands.push({
       id: "delete-session",
       label: "Delete this session",
@@ -466,6 +483,39 @@ export function Dialogs({ state }: { state: AppState }) {
             label="Add workspace"
             variant="primary"
             testId="confirm-add-workspace"
+            onClick={submit}
+            hint="↩"
+          />
+        </Actions>
+      </DialogShell>
+    )
+  }
+
+  if (dialog.kind === "rename-session") {
+    const submit = () => {
+      const title = dialog.value.trim()
+      close()
+      if (title) updateSession(dialog.sessionId, (session) => ({ ...session, title }))
+    }
+    return (
+      <DialogShell
+        title="Rename this session"
+        description="The name shows in the sidebar, the palette, and the pane header."
+        onClose={close}
+      >
+        <TextField
+          testId="session-title"
+          value={dialog.value}
+          placeholder="What this session is about"
+          onChange={(value) => setDialog({ ...dialog, value })}
+          onSubmit={submit}
+        />
+        <Actions>
+          <Button label="Cancel" variant="ghost" onClick={close} />
+          <Button
+            label="Rename"
+            variant="primary"
+            testId="confirm-rename-session"
             onClick={submit}
             hint="↩"
           />

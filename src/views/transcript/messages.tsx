@@ -1,8 +1,9 @@
+import { spawn } from "node:child_process"
 import { useContext, useState } from "react"
 
 import { Icon } from "../../ui/icons"
 import { color, FONT, nativeTheme, radius, space, text } from "../../ui/theme"
-import { Label, Thumbnail } from "../../ui/ui"
+import { IconButton, Label, Thumbnail } from "../../ui/ui"
 import { openExternally } from "../../agent/oauth"
 import { removeMessage, type Message } from "../../store"
 import { GUTTER, HoldTail, Row } from "./shared"
@@ -122,17 +123,44 @@ function Reasoning({ body }: { body: string }) {
   )
 }
 
+const COPIED_MS = 1500
+
+function copyText(value: string): void {
+  const child = spawn("pbcopy")
+  child.on("error", () => {})
+  child.stdin.end(value)
+}
+
 export function AssistantMessage({
   message,
+  copyable = false,
 }: {
   message: Extract<Message, { kind: "assistant" }>
+  copyable?: boolean
 }) {
+  const [copied, setCopied] = useState(false)
   return (
     <Row>
       <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
         {message.reasoning ? <Reasoning body={message.reasoning} /> : null}
         {message.text ? (
           <markdown source={message.text} theme={nativeTheme} style={{ color: color.text }} />
+        ) : null}
+        {copyable && message.text ? (
+          <div style={{ display: "flex", flexDirection: "row" }}>
+            <IconButton
+              icon={copied ? "check" : "copy"}
+              size={22}
+              tooltip={copied ? "Copied" : "Copy"}
+              testId={`copy-${message.id}`}
+              tone={color.ghost}
+              onClick={() => {
+                copyText(message.text)
+                setCopied(true)
+                setTimeout(() => setCopied(false), COPIED_MS)
+              }}
+            />
+          </div>
         ) : null}
       </div>
     </Row>

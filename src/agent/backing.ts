@@ -4,6 +4,7 @@ import {
   DEFAULT_MODEL,
   getState,
   nativeSearch,
+  setLimits,
   type Session,
 } from "../store"
 
@@ -44,6 +45,7 @@ export function backing(
         search,
         onSearch,
         onUsage,
+        onLimits: provider ? (limits) => setLimits(provider, limits) : undefined,
       }),
       ...(model ? { model } : {}),
       ...(state.useCli ? { runtimeFactory: cliRuntime } : {}),

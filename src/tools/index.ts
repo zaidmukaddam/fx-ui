@@ -9,6 +9,7 @@ import { type HostTool, type ToolContext } from "./kit"
 export {
   denyPendingApprovals,
   dismissPendingQuestions,
+  forgetGrants,
   resolveApproval,
   resolveQuestion,
 } from "./approvals"

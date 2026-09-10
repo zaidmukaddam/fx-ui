@@ -153,7 +153,11 @@ async function nameSession(sessionId: string, prompt: string): Promise<void> {
       }
       const result = await turn.result
       const title = result.stopReason === "end_turn" ? cleanTitle(raw) : ""
-      if (title) updateSession(sessionId, (current) => ({ ...current, title }))
+      if (title) {
+        updateSession(sessionId, (current) =>
+          current.title === session?.title ? { ...current, title } : current,
+        )
+      }
     } finally {
       await agent.close()
     }

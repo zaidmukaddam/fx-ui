@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
+import type { PlanLimits } from "./agent/providers"
 import type { GitStatus } from "./workspace/git"
 
 export type PermissionMode = "ask" | "auto" | "full-access"
@@ -131,6 +132,7 @@ export type Dialog =
   | { kind: "add-workspace"; value: string; error: string | null }
   | { kind: "delete-session"; sessionId: string }
   | { kind: "remove-workspace"; workspaceId: string }
+  | { kind: "rename-session"; sessionId: string; value: string }
 
 export type AppState = {
   workspaces: Workspace[]
@@ -148,6 +150,7 @@ export type AppState = {
   background: Record<string, BackgroundCommand[]>
   attachments: Record<string, string[]>
   git: Record<string, GitStatus | null>
+  limits: Record<string, PlanLimits>
   paletteOpen: boolean
   settingsOpen: boolean
   dialog: Dialog | null
@@ -201,6 +204,7 @@ function emptyState(): AppState {
     background: {},
     attachments: {},
     git: {},
+    limits: {},
     paletteOpen: false,
     settingsOpen: false,
     dialog: null,
@@ -239,6 +243,7 @@ function load(): AppState {
     background: {},
     attachments: {},
     git: {},
+    limits: {},
     paletteOpen: false,
     settingsOpen: false,
     dialog: null,
@@ -585,6 +590,10 @@ export function setBackground(sessionId: string, running: BackgroundCommand[]): 
     ...current,
     background: { ...current.background, [sessionId]: running },
   }))
+}
+
+export function setLimits(provider: string, limits: PlanLimits): void {
+  setState((current) => ({ ...current, limits: { ...current.limits, [provider]: limits } }))
 }
 
 export function setAttachments(sessionId: string, files: string[]): void {
