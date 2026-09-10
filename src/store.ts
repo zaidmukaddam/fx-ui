@@ -161,7 +161,7 @@ function home(): string {
   if (override) return path.resolve(override)
   if (process.env.VITEST) {
     throw new Error(
-      "A test run must set FX_UI_HOME. Refusing to read or write the real ~/.fx-ui — run the suite with `bun run test`.",
+      "A test run must set FX_UI_HOME so it never touches the real ~/.fx-ui. Run the suite with `bun run test`.",
     )
   }
   return path.join(os.homedir(), ".fx-ui")

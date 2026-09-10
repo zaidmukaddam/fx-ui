@@ -51,7 +51,7 @@ function vision(context: ToolContext): HostTool {
     {
       name: "vision",
       description:
-        "Look at an image, in the workspace or attached by the user, and answer a question about it — a screenshot of a failing UI, a diagram, a photo of a whiteboard.",
+        "Look at an image in the workspace, or one the user attached, and answer a question about it, such as a screenshot of a failing UI or a photo of a whiteboard.",
       inputSchema: {
         type: "object",
         properties: {
@@ -187,7 +187,7 @@ function webSearch(context: ToolContext): HostTool {
         const { apiKey } = getState()
         if (!apiKey) {
           throw new Error(
-            "Web search runs Exa inside the AI Gateway, which needs its own key — a subscription cannot serve it.",
+            "Web search runs Exa inside the AI Gateway, which needs its own key. A subscription cannot serve it.",
           )
         }
 

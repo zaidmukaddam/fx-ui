@@ -367,7 +367,7 @@ export function CommandPalette({ state }: { state: AppState }) {
               }}
             >
               <Label size={text.body} color={color.faint}>
-                {`No command matches “${query}”`}
+                {`No command matches "${query}"`}
               </Label>
             </div>
           ) : null}
@@ -529,7 +529,7 @@ export function Dialogs({ state }: { state: AppState }) {
     return (
       <DialogShell
         title="Delete this session?"
-        description={`“${session?.title ?? "This session"}” and its saved history are removed. The files it changed are not touched.`}
+        description={`"${session?.title ?? "This session"}" and its saved history are removed. The files it changed are not touched.`}
         onClose={close}
       >
         <Actions>
@@ -555,7 +555,7 @@ export function Dialogs({ state }: { state: AppState }) {
   return (
     <DialogShell
       title="Remove this workspace?"
-      description={`“${workspace?.name ?? "This workspace"}” and its ${count} session${count === 1 ? "" : "s"} are removed from fx. The directory on disk is not touched.`}
+      description={`"${workspace?.name ?? "This workspace"}" and its ${count} session${count === 1 ? "" : "s"} are removed from fx. The directory on disk is not touched.`}
       onClose={close}
     >
       <Actions>

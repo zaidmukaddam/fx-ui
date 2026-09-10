@@ -96,7 +96,7 @@ export function agentTools(
             {
               name: "subagent",
               description:
-                "Delegate a self-contained task to a second agent with the same workspace tools, and get back only its final answer. Use it for work whose intermediate steps you do not need — a wide search, a survey of many files — so their output does not fill this conversation.",
+                "Delegate a self-contained task to a second agent with the same workspace tools, and get back only its final answer. Use it for work whose intermediate steps you do not need, like a wide search or a survey of many files, so their output does not fill this conversation.",
               inputSchema: {
                 type: "object",
                 properties: {
@@ -138,8 +138,8 @@ export function agentTools(
                     "",
                     "You cannot see the conversation that delegated this task, and nobody",
                     "reads your intermediate steps. Do the work, then answer with the",
-                    "findings themselves — file paths, line numbers, what you concluded —",
-                    "not a description of what you did.",
+                    "findings themselves: file paths, line numbers, what you concluded.",
+                    "Do not describe what you did.",
                     ...(input.instructions ? ["", input.instructions] : []),
                   ].join("\n"),
                   tools: makeTools({
@@ -176,7 +176,7 @@ export function agentTools(
       {
         name: "ask_user_question",
         description:
-          "Ask the user a question and wait for their answer. Use it when a choice is genuinely theirs — which of two approaches, which file they meant — not to confirm work you can simply do.",
+          "Ask the user a question and wait for their answer. Use it when the choice is theirs to make, such as which of two approaches to take or which file they meant. Do not use it to confirm work you can do yourself.",
         inputSchema: {
           type: "object",
           properties: {

@@ -138,11 +138,11 @@ export function extensionTools(context: ToolContext): HostTool[] {
           const { commands } = await loadSkills(ctx.root)
           const skills = commands
             .filter((skill) => matches(`${skill.name} ${skill.description}`))
-            .map((skill) => `skill  ${skill.name} — ${skill.description || "no description"}`)
+            .map((skill) => `skill  ${skill.name}: ${skill.description || "no description"}`)
 
           const servers = listMcpTools()
             .filter((tool) => matches(`${tool.name} ${tool.description}`))
-            .map((tool) => `mcp    ${tool.name} — ${tool.description}`)
+            .map((tool) => `mcp    ${tool.name}: ${tool.description}`)
 
           const found = [...skills, ...servers]
           return {
@@ -176,7 +176,7 @@ export function extensionTools(context: ToolContext): HostTool[] {
             }
           }
           const lines = servers.map(
-            (server) => `${server.name} — ${server.tools} tools: ${server.toolNames.join(", ")}`,
+            (server) => `${server.name} (${server.tools} tools): ${server.toolNames.join(", ")}`,
           )
           return { text: lines.join("\n"), label: `${servers.length} servers` }
         },
@@ -213,7 +213,7 @@ export function extensionTools(context: ToolContext): HostTool[] {
           }
           return {
             text: [
-              `${tool.name} — ${tool.description}`,
+              `${tool.name}: ${tool.description}`,
               "",
               "It is already available; call it directly. Input schema:",
               JSON.stringify(tool.inputSchema, null, 2),

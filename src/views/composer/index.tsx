@@ -276,7 +276,7 @@ export function Composer({
           <textarea
             testId="composer"
             value={draft}
-            placeholder={running ? "Running — ⌘. to stop" : "Ask fx to change something"}
+            placeholder={running ? "Running · ⌘. to stop" : "Ask fx to change something"}
             minRows={1}
             maxRows={12}
             autoFocus

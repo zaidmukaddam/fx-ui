@@ -229,7 +229,7 @@ export function fileTools(context: ToolContext): HostTool[] {
       {
         name: "glob_files",
         description:
-          "Find files by path pattern. `*` matches within one segment, `**` across segments, `?` one character — for example `src/**/*.ts`. Use it to locate files by name; use search to find text inside them.",
+          "Find files by path pattern. `*` matches within one segment, `**` across segments, `?` one character, as in `src/**/*.ts`. Use it to locate files by name; use grep_files to find text inside them.",
         inputSchema: {
           type: "object",
           properties: {

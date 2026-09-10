@@ -224,7 +224,7 @@ export function shellTools(context: ToolContext): HostTool[] {
                 `$ ${input.command}`,
                 output,
                 "",
-                `Still running. Handle "${handle}" — use shell with action interact or stop.`,
+                `Still running. Handle "${handle}". Use shell with action interact or stop.`,
               ].join("\n"),
               language: "bash",
               label: `${input.command} · running`,

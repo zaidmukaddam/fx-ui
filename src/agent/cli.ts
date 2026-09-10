@@ -190,7 +190,7 @@ export async function fxStatus(): Promise<string> {
     result = await capture(FX_BINARY, ["status"], { timeoutMs: 15_000 })
   } catch (error) {
     if (isMissingProgram(error)) {
-      return `\`${FX_BINARY}\` is not on PATH — install fx, or set FX_BINARY.`
+      return `\`${FX_BINARY}\` is not on PATH. Install fx, or set FX_BINARY.`
     }
     return error instanceof Error ? error.message : String(error)
   }
@@ -206,7 +206,7 @@ export async function fxStatus(): Promise<string> {
   const model = fields.get("model")
   const stale =
     fields.get("auth_expired") === "true" && fields.get("auth_refreshable") !== "true"
-  return [auth, model, stale ? "expired — sign in again" : ""]
+  return [auth, model, stale ? "expired, sign in again" : ""]
     .filter(Boolean)
     .join(" · ")
 }

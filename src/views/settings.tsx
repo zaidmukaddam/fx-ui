@@ -279,7 +279,7 @@ function AddMcpServerRow({ onChanged }: { onChanged: () => void }) {
           <TextField
             testId="mcp-source"
             value={source}
-            placeholder="https://mcp.linear.app/mcp — or — npx -y some-server"
+            placeholder="https://mcp.linear.app/mcp or npx -y some-server"
             onChange={setSource}
             onSubmit={save}
           />
@@ -629,7 +629,7 @@ export function Settings({ state }: { state: AppState }) {
               ? "Reading…"
               : loaded.servers.length > 0
                 ? "Configured in ~/.fx-ui/mcp.json, never from a workspace. A remote server's tools ask before they run."
-                : "None configured. Add them to ~/.fx-ui/mcp.json — a `command` for a local one, a `url` for a remote one."
+                : "None configured. Add them to ~/.fx-ui/mcp.json: a `command` for a local one, a `url` for a remote one."
           }
         />
         {(loaded?.servers ?? []).map((server) => (
