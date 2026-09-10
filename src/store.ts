@@ -437,7 +437,7 @@ function startsOn(current: AppState, workspaceId: string): StartsOn {
   const previous = current.sessions.find(
     (session) => session.workspaceId === workspaceId,
   )
-  const mode = previous?.mode ?? "ask"
+  const mode = previous?.mode ?? "auto"
 
   const pinned = current.defaultModel
   if (pinned && answerable(current, pinned.provider)) {
