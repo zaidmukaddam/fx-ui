@@ -2,6 +2,7 @@ import { cliRuntime } from "./cli"
 import { providerFetch, type SearchStep } from "./providers"
 import {
   DEFAULT_MODEL,
+  canAnswer,
   getState,
   nativeSearch,
   setLimits,
@@ -26,10 +27,9 @@ export function backing(
   onUsage?: (tokens: number) => void,
 ): Backing | null {
   const state = getState()
-  if (!session) return null
+  if (!session || !canAnswer(state, session)) return null
 
   const provider = session.provider
-  if (!state.apiKey && !state.useCli && !provider) return null
 
   const search = nativeSearch(state, session)
   const model = session.model ?? (state.useCli ? null : DEFAULT_MODEL.id)

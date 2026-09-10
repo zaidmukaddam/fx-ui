@@ -23,6 +23,7 @@ import { loadSkills } from "../workspace/skills"
 import {
   DEFAULT_MODEL,
   DIR,
+  apiKeySource,
   findSession,
   findWorkspace,
   setSettings,
@@ -41,7 +42,7 @@ import {
   titlebarBand,
   TRAFFIC_LIGHT_INSET,
 } from "../ui/theme"
-import { Button, Label, Paragraph, TextField } from "../ui/ui"
+import { Button, Kbd, Label, Paragraph, TextField } from "../ui/ui"
 
 type Server = ReturnType<typeof listMcpServers>[number]
 
@@ -51,6 +52,36 @@ type Loaded = {
   skills: string[]
   servers: Server[]
   cli: ProviderId[]
+}
+
+function needsSetup(state: AppState): boolean {
+  return !state.useCli && apiKeySource(state) === "none" && state.accounts.length === 0
+}
+
+function SetupBanner({ state }: { state: AppState }) {
+  if (!needsSetup(state)) return null
+  return (
+    <div
+      testId="settings-setup"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: space.sm,
+        padding: space.lg,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: color.border,
+        minWidth: 0,
+      }}
+    >
+      <Label size={text.small} color={color.text}>
+        Nothing can answer a prompt yet
+      </Label>
+      <Paragraph size={text.micro} color={color.ghost}>
+        Paste an AI Gateway key or sign in to Grok or Codex below.
+      </Paragraph>
+    </div>
+  )
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -504,6 +535,7 @@ export function Settings({ state }: { state: AppState }) {
         minWidth: 0,
       }}
     >
+      <SetupBanner state={state} />
       <Section title="Models">
         <ApiKeyRow state={state} />
         {(["grok", "codex"] as const).map((provider) => (
@@ -662,7 +694,8 @@ export function SettingsPage({
         <Label size={text.micro} color={color.ghost}>
           Saved as you go
         </Label>
-        <Button label="Done" size="sm" hint="⎋" onClick={() => setSettings(false)} />
+        <Kbd keys="esc" />
+        <Button label="Done" size="sm" testId="settings-done" onClick={() => setSettings(false)} />
       </div>
 
       <div

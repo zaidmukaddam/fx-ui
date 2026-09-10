@@ -3,9 +3,9 @@ import { useContext, useState } from "react"
 
 import { Icon } from "../../ui/icons"
 import { color, FONT, nativeTheme, radius, space, text } from "../../ui/theme"
-import { IconButton, Label, Thumbnail } from "../../ui/ui"
+import { Button, IconButton, Label, Thumbnail } from "../../ui/ui"
 import { openExternally } from "../../agent/oauth"
-import { removeMessage, type Message } from "../../store"
+import { removeMessage, setSettings, type Message } from "../../store"
 import { GUTTER, Gutter, HoldTail, Row } from "./shared"
 
 const IMAGE_SIZE = 80
@@ -179,16 +179,13 @@ export function Notice({
     <Row>
       <div
         testId={`notice-${message.id}`}
-        onClick={() => removeMessage(sessionId, message.id)}
         style={{
           display: "flex",
           flexDirection: "row",
           alignItems: "flex-start",
           gap: space.md,
-          paddingRight: space.md,
+          paddingRight: space.xs,
           borderRadius: radius.sm,
-          cursor: "pointer",
-          hover: { backgroundColor: color.hover },
         }}
       >
         <Gutter top={3}>
@@ -210,6 +207,22 @@ export function Notice({
         >
           {message.text}
         </text>
+        {message.action === "settings" ? (
+          <Button
+            label="Settings"
+            size="sm"
+            testId={`notice-settings-${message.id}`}
+            onClick={() => setSettings(true)}
+          />
+        ) : null}
+        <IconButton
+          icon="x"
+          size={18}
+          tooltip="Dismiss"
+          testId={`notice-dismiss-${message.id}`}
+          tone={color.ghost}
+          onClick={() => removeMessage(sessionId, message.id)}
+        />
       </div>
     </Row>
   )

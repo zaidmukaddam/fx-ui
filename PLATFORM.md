@@ -209,6 +209,12 @@ find whatever the click should have opened. Scroll first. In the test renderer
 `wheel(0, -4000)` scrolls down, since the delta moves the content, and the
 offset stops at the end of the content.
 
+### `⎋` is not in the UI font
+
+The Settings Done control used `hint="⎋"` for Escape. SF Mono paints a
+missing-glyph box. The control now uses the same `Kbd` cap as the empty
+states, labelled `esc`.
+
 ### An icon is imported, not read
 
 `import icon from "./x.svg" with { type: "text" }` hands back the file's

@@ -60,6 +60,7 @@ export type Message =
       at: number
       tone: "info" | "error"
       text: string
+      action?: "settings"
     }
 
 export type Context = {
@@ -127,6 +128,9 @@ export const DEFAULT_MODEL: Model = {
   id: "poolside/laguna-s-2.1-free",
   name: "Laguna S 2.1 Free",
 }
+
+export const NO_CREDENTIAL =
+  "This session has no credential. Add an AI Gateway API key, or pick a model from a subscription you are signed in to."
 
 export type Dialog =
   | { kind: "add-workspace"; value: string; error: string | null }
@@ -359,8 +363,20 @@ export function appendMessage(sessionId: string, message: Message): void {
   }))
 }
 
-export function notice(sessionId: string, tone: "info" | "error", text: string): void {
-  appendMessage(sessionId, { id: newId(), kind: "notice", at: Date.now(), tone, text })
+export function notice(
+  sessionId: string,
+  tone: "info" | "error",
+  text: string,
+  action?: "settings",
+): void {
+  appendMessage(sessionId, {
+    id: newId(),
+    kind: "notice",
+    at: Date.now(),
+    tone,
+    text,
+    ...(action ? { action } : {}),
+  })
 }
 
 export function removeMessage(sessionId: string, messageId: string): void {
@@ -434,6 +450,11 @@ type StartsOn = Pick<
 
 function answerable(current: AppState, provider: "grok" | "codex" | null): boolean {
   return provider !== null || apiKeySource(current) !== "none"
+}
+
+export function canAnswer(current: AppState, session: Session | null): boolean {
+  if (!session) return false
+  return Boolean(current.apiKey) || current.useCli || session.provider !== null
 }
 
 function firstSubscription(current: AppState): Chosen | null {

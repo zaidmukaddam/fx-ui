@@ -2,7 +2,7 @@ import { useState } from "react"
 
 import { color, columnFor, FONT, nativeTheme, radius, space, text } from "../../ui/theme"
 import { IconButton, Thumbnail } from "../../ui/ui"
-import { setAttachments, useApp, type Session } from "../../store"
+import { canAnswer, setAttachments, useApp, type Session } from "../../store"
 import { CAN_PICK_IMAGES } from "../../workspace/images"
 import { ContextMeter } from "./context"
 import {
@@ -54,9 +54,11 @@ export function Composer({
   const { column, gutter } = columnFor(paneWidth)
   const [draft, setDraft] = useState("")
   const picker = useTokenPicker(draft, setDraft, root)
+  const state = useApp()
   const running = session.status === "running"
-  const attached = useApp().attachments[session.id] ?? []
+  const attached = state.attachments[session.id] ?? []
   const ready = (draft.trim().length > 0 || attached.length > 0) && !running
+  const readyToAnswer = canAnswer(state, session)
 
   const tight = column < 340
   const oneRow = fitsOneRow(draft, column)
@@ -192,7 +194,13 @@ export function Composer({
           <textarea
             testId="composer"
             value={draft}
-            placeholder={running ? "Running · ⌘. to stop" : "Ask fx to change something"}
+            placeholder={
+              running
+                ? "Running · ⌘. to stop"
+                : readyToAnswer
+                  ? "Ask fx to change something"
+                  : "Add a key in Settings to send"
+            }
             minRows={1}
             maxRows={12}
             autoFocus

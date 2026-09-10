@@ -60,20 +60,22 @@ while the other dims.
 ### Notices
 
 The app's own messages, like a stop reason or a catalogue that would not load,
-sit in the transcript. They are the one kind of row you can dismiss: click one,
-or use *Clear notices* for a screenful. A request the provider turns down shows
-here as an error, not as the model's reply. Sign-in state is not among them.
-It belongs to settings, which shows it as it is now rather than as of an hour
-ago.
+sit in the transcript. Dismiss one with the × on the row, or *Clear notices* for
+a screenful. A request the provider turns down shows here as an error, not as
+the model's reply. A missing-credential error stays on the session and offers
+Settings; it does not replace the conversation with the settings page. Sign-in
+state is not among them. It belongs to settings, which shows it as it is now
+rather than as of an hour ago.
 
 ### Settings
 
 The gear in the sidebar footer, `⌘,`, or the palette opens it. It is a full
 page in place of the panes, with the Gateway key, the sign-ins, the model new
 sessions start on, which runtime answers a turn, and the skills and MCP servers
-that are loaded. It reads from disk each time it opens, because a sign-in is a
-file, not something the app's state can derive. Opening a session is how you
-leave it.
+that are loaded. Esc or Done leaves it; opening a session does too. It reads
+from disk each time it opens, because a sign-in is a file, not something the
+app's state can derive. If nothing can answer yet, a banner at the top of the
+page says so.
 
 ### Approvals
 
@@ -118,7 +120,9 @@ a key, since none of it could be spent. Subscription catalogues are read at
 startup and the whole list is saved with the rest of the state, so a relaunch
 opens the picker on what it had instead of on nothing while three requests
 land. Switching a model checkpoints the conversation and restores it into a
-new agent, because the model is a creation option.
+new agent, because the model is a creation option. With no key and no
+subscription, the picker says *No model* instead of naming a Gateway default
+that could not run.
 
 ### What a new session starts on
 
@@ -129,11 +133,14 @@ effort and fast tier together, since a model id without the provider that
 serves it routes nowhere. The first session in a workspace has nothing to
 follow, so it opens on a signed-in subscription's own model, the first its
 catalogue lists (which is also the first the picker shows). It falls back to
-`poolside/laguna-s-2.1-free` on the Gateway only when no subscription is signed
-in. Neither provider publishes which model it considers the default, so the
-order they list them in is the only thing to go on. Whichever rule applies, a
-model nothing could answer with is skipped: a Gateway model with no key in hand
-gives way to a subscription.
+`poolside/laguna-s-2.1-free` on the Gateway only when a key is in hand and no
+subscription is signed in. Neither provider publishes which model it considers
+the default, so the order they list them in is the only thing to go on.
+Whichever rule applies, a model nothing could answer with is skipped: a
+Gateway model with no key in hand gives way to a subscription. A new session
+with nothing to answer on shows *Nothing can answer yet* in the pane. Sending
+a prompt keeps the message on the transcript with a Settings action, instead of
+replacing the conversation with the settings page.
 
 ### Reasoning effort
 
