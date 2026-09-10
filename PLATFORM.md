@@ -376,3 +376,15 @@ their own process group (`detached: true`) and are stopped as a group, whether
 from the composer, the agent, a deleted session, or the app's exit, which stops
 every one. A crash or `kill -9` still leaves them running, since nothing is left
 to stop them.
+
+## Hot reload
+
+**`bun --hot` evaluates an edited module again and leaves the old copy
+running.** Measured: after one edit, the old copy's `setInterval` kept firing
+beside the new copy's, each counting in its own module state. `bun run dev` is
+`bun --hot`, so every edit to the store left two stores in the process. Each
+held its own sessions and wrote `state.json` on its own timer, the last write
+won, and a session could vanish. The store now keeps its state, its listeners
+and its save timer on `globalThis`, so every copy of the module shares one of
+each. Other module state still splits: a turn that was running keeps the copy
+that started it.

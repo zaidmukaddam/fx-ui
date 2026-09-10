@@ -245,9 +245,20 @@ function load(): AppState {
   }
 }
 
-let persistTimer: ReturnType<typeof setTimeout> | null = null
+type Shared = {
+  state: AppState
+  listeners: Set<() => void>
+  persistTimer: ReturnType<typeof setTimeout> | null
+}
+
+const shared: Shared = ((globalThis as { fxUiStore?: Shared }).fxUiStore ??= {
+  state: load(),
+  listeners: new Set(),
+  persistTimer: null,
+})
 
 function persistNow(): void {
+  const { state } = shared
   const snapshot = {
     workspaces: state.workspaces,
     sessions: state.sessions.map((session) => ({
@@ -274,31 +285,28 @@ function persistNow(): void {
 }
 
 function schedulePersist(): void {
-  if (persistTimer) return
-  persistTimer = setTimeout(() => {
-    persistTimer = null
+  if (shared.persistTimer) return
+  shared.persistTimer = setTimeout(() => {
+    shared.persistTimer = null
     persistNow()
   }, 400)
 }
 
-let state = load()
-const listeners = new Set<() => void>()
-
 export function getState(): AppState {
-  return state
+  return shared.state
 }
 
 export function setState(update: (current: AppState) => AppState): void {
-  const next = update(state)
-  if (next === state) return
-  state = next
-  for (const listener of listeners) listener()
+  const next = update(shared.state)
+  if (next === shared.state) return
+  shared.state = next
+  for (const listener of shared.listeners) listener()
   schedulePersist()
 }
 
 function subscribe(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => listeners.delete(listener)
+  shared.listeners.add(listener)
+  return () => shared.listeners.delete(listener)
 }
 
 export function useApp(): AppState {
@@ -657,7 +665,7 @@ export function resetState(): void {
 }
 
 export function flushState(): void {
-  if (persistTimer) clearTimeout(persistTimer)
-  persistTimer = null
+  if (shared.persistTimer) clearTimeout(shared.persistTimer)
+  shared.persistTimer = null
   persistNow()
 }

@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process"
 import { createServer } from "node:http"
 import path from "node:path"
 
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import { connectTest } from "@gpuix/react/automation"
 import { createTestRoot, hasNativeTestRenderer } from "@gpuix/react/testing"
 
@@ -2656,6 +2656,16 @@ describeNative("fx app", () => {
       globalThis.fetch = realFetch
       rmSync(path.join(DIR, "providers.json"), { force: true })
     }
+  })
+
+  it("keeps one store when a hot reload evaluates the module again", async () => {
+    vi.resetModules()
+    const reloaded = await import("./src/store")
+    expect(reloaded.getState()).toBe(getState())
+
+    const workspace = createWorkspace(tempDir(), "demo")
+    reloaded.openSession(reloaded.createSession(workspace.id).id, 0)
+    expect(getState().sessions).toHaveLength(1)
   })
 
   it("picks an effort from the slider and restarts the agent for it", async () => {
