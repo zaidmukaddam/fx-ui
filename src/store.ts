@@ -136,6 +136,12 @@ export type Dialog =
 
 export type Overlay = { kind: "palette" } | Dialog
 
+export type UpdateStatus =
+  | { stage: "idle" }
+  | { stage: "downloading"; version: string }
+  | { stage: "ready"; version: string; appPath: string }
+  | { stage: "error"; message: string }
+
 export type AppState = {
   workspaces: Workspace[]
   sessions: Session[]
@@ -155,6 +161,7 @@ export type AppState = {
   limits: Record<string, PlanLimits>
   settingsOpen: boolean
   overlay: Overlay | null
+  update: UpdateStatus
 }
 
 function home(): string {
@@ -208,6 +215,7 @@ function emptyState(): AppState {
     limits: {},
     settingsOpen: false,
     overlay: null,
+    update: { stage: "idle" },
   }
 }
 
@@ -635,6 +643,10 @@ export function setBackground(sessionId: string, running: BackgroundCommand[]): 
 
 export function setLimits(provider: string, limits: PlanLimits): void {
   setState((current) => ({ ...current, limits: { ...current.limits, [provider]: limits } }))
+}
+
+export function setUpdate(status: UpdateStatus): void {
+  setState((current) => ({ ...current, update: status }))
 }
 
 export function setAttachments(sessionId: string, files: string[]): void {

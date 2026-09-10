@@ -6,6 +6,7 @@ import type { EventPayload } from "@gpuix/native"
 import { cancel, closeAll, send } from "./src/agent/agent"
 import { stopAllBackgroundCommands } from "./src/tools"
 import { refreshCredentials } from "./src/agent/credentials"
+import { checkForUpdate } from "./src/update"
 import { Composer } from "./src/views/composer"
 import { CommandPalette } from "./src/views/palette"
 import { Dialogs } from "./src/views/dialogs"
@@ -536,6 +537,8 @@ function inheritLoginPath(): void {
 if (isEntryPoint) {
   inheritLoginPath()
   void refreshCredentials()
+  void checkForUpdate()
+  setInterval(() => void checkForUpdate(), 6 * 60 * 60 * 1000)
   process.on("exit", () => {
     flushState()
     stopAllBackgroundCommands()

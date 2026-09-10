@@ -20,6 +20,7 @@ import {
   type ProviderId,
 } from "../agent/oauth"
 import { loadSkills } from "../workspace/skills"
+import { checkForUpdate, relaunch } from "../update"
 import {
   DEFAULT_MODEL,
   DIR,
@@ -29,6 +30,7 @@ import {
   setState,
   type Account,
   type AppState,
+  type UpdateStatus,
 } from "../store"
 import { ModelChoice, keyOf } from "./models"
 import {
@@ -459,6 +461,50 @@ function ProviderRow({
   )
 }
 
+function UpdateRow({ update }: { update: UpdateStatus }) {
+  return (
+    <Row
+      title="Version"
+      detail={
+        update.stage === "downloading"
+          ? "Downloading the update…"
+          : update.stage === "ready"
+            ? `Update ${update.version} downloaded`
+            : update.stage === "error"
+              ? update.message
+              : "fx-ui"
+      }
+      danger={update.stage === "error"}
+    >
+      {update.stage === "ready" ? (
+        <Button
+          label="Restart to update"
+          variant="primary"
+          size="sm"
+          testId="restart-to-update"
+          onClick={() => void relaunch(update.appPath)}
+        />
+      ) : update.stage === "downloading" ? (
+        <Label size={text.small} color={color.ghost}>
+          {version}
+        </Label>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: space.md }}>
+          <Label size={text.small} color={color.ghost}>
+            {version}
+          </Label>
+          <Button
+            label="Check for updates"
+            size="sm"
+            testId="check-for-updates"
+            onClick={() => void checkForUpdate()}
+          />
+        </div>
+      )}
+    </Row>
+  )
+}
+
 export function Settings({ state }: { state: AppState }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
 
@@ -605,11 +651,7 @@ export function Settings({ state }: { state: AppState }) {
       </Section>
 
       <Section title="About">
-        <Row title="Version" detail="fx-ui">
-          <Label size={text.small} color={color.ghost}>
-            {version}
-          </Label>
-        </Row>
+        <UpdateRow update={state.update} />
         <Row title="State" detail={DIR}>
           <Label size={text.small} color={color.ghost}>
             {`${state.workspaces.length} workspaces · ${state.sessions.length} sessions`}

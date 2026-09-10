@@ -63,6 +63,7 @@ import {
   type SearchStep,
 } from "./src/agent/providers"
 import { toResponsesRequest } from "./src/agent/responses"
+import { compareVersions, latestRelease } from "./src/update"
 import { CONTENT_WIDTH, TITLEBAR_CENTER } from "./src/ui/theme"
 import {
   createTools,
@@ -3371,6 +3372,39 @@ describeNative("fx app", () => {
     expect(outdatedForProviders("0.1.0")).toBe(false)
     expect(outdatedForProviders("1.0.0")).toBe(false)
     expect(outdatedForProviders(null)).toBe(false)
+  })
+
+  it("compares release versions numerically, not lexicographically", () => {
+    expect(compareVersions("0.1.10", "0.1.9")).toBeGreaterThan(0)
+    expect(compareVersions("0.1.2", "0.1.2")).toBe(0)
+    expect(compareVersions("v0.2.0", "0.1.9")).toBeGreaterThan(0)
+    expect(compareVersions("0.1.1", "0.1.2")).toBeLessThan(0)
+  })
+
+  it("reads the latest release's version and dmg url from the github api", async () => {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String((input as Request)?.url ?? input)
+      if (url.includes("api.github.com/repos/zaidmukaddam/fx-ui/releases/latest")) {
+        return Response.json({
+          tag_name: "v0.1.3",
+          assets: [
+            { name: "fx-0.1.3.dmg", browser_download_url: "https://example.com/fx-0.1.3.dmg" },
+            { name: "checksums.txt", browser_download_url: "https://example.com/checksums.txt" },
+          ],
+        })
+      }
+      return realFetch(input as RequestInfo)
+    }) as unknown as typeof fetch
+
+    try {
+      expect(await latestRelease()).toEqual({
+        version: "0.1.3",
+        dmgUrl: "https://example.com/fx-0.1.3.dmg",
+      })
+    } finally {
+      globalThis.fetch = realFetch
+    }
   })
 
   it("runs a session with no model of its own on the default", async () => {
