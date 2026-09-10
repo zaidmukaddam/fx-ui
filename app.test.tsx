@@ -349,8 +349,17 @@ describe("session titles", () => {
     expect(cleanTitle("   ")).toBe("")
   })
 
-  it("caps a rambling title", () => {
-    expect(cleanTitle("word ".repeat(40)).length).toBeLessThanOrEqual(56)
+  it("drops a rambling title", () => {
+    expect(cleanTitle("word ".repeat(40))).toBe("")
+  })
+
+  it("drops a reply that answers the request instead of naming it", () => {
+    expect(cleanTitle("I'd be happy to help with that!")).toBe("")
+    expect(cleanTitle("Sure, here are five ideas")).toBe("")
+    expect(cleanTitle("Here's what I would do next")).toBe("")
+    expect(cleanTitle("What would you like me to change?")).toBe("")
+    expect(cleanTitle("Title: Ideas for the next release")).toBe("Ideas for the next release")
+    expect(cleanTitle("Idea list for fx-ui")).toBe("Idea list for fx-ui")
   })
 })
 
