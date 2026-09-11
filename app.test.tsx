@@ -3989,6 +3989,48 @@ describeNative("fx app", () => {
     expect(findSession(getState(), session.id)?.status).toBe("idle")
   })
 
+  it.each(["HTTP 401", "HTTP 400", "output limit"])(
+    "keeps queued prompts after a turn ends with %s",
+    async (outcome) => {
+      const workspace = createWorkspace(tempDir(), "demo")
+      const session = createSession(workspace.id)
+      setState((current) => ({ ...current, apiKey: "gateway-key" }))
+      updateSession(session.id, (current) => ({ ...current, title: "Queue failures" }))
+
+      let release = () => {}
+      const answered = new Promise<void>((resolve) => (release = resolve))
+      const realFetch = globalThis.fetch
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String((input as Request)?.url ?? input)
+        if (!url.includes("/language-model")) return Response.json({ object: "list", data: [] })
+        await answered
+        if (outcome.startsWith("HTTP")) {
+          return Response.json({ error: { message: "Request failed" } }, { status: Number(outcome.slice(5)) })
+        }
+        return new Response(
+          `data: ${JSON.stringify({ type: "finish", finishReason: { unified: "length" } })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        )
+      }) as unknown as typeof fetch
+
+      try {
+        const first = send(session.id, "first")
+        await send(session.id, "second", ["/tmp/queued-image.png"])
+        await send(session.id, "third")
+        release()
+        await first
+
+        expect(messagesOf(session.id).filter((message) => message.kind === "user").map((message) => message.text))
+          .toEqual(["first"])
+        expect(getState().queue[session.id]?.map(({ text, images }) => ({ text, images })))
+          .toEqual([{ text: "second", images: ["/tmp/queued-image.png"] }, { text: "third", images: [] }])
+      } finally {
+        release()
+        globalThis.fetch = realFetch
+      }
+    },
+  )
+
   it("leaves the queue in place when the turn is stopped", async () => {
     const workspace = createWorkspace(tempDir(), "demo")
     const session = createSession(workspace.id)

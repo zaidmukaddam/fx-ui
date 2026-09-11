@@ -475,6 +475,7 @@ export async function send(
   cancelled.delete(sessionId)
 
   const stream = new Stream(sessionId)
+  let completed = false
   try {
     const runtime = await runtimeFor(sessionId)
 
@@ -522,6 +523,7 @@ export async function send(
     if (outcome) notice(sessionId, "info", outcome)
     updateSession(sessionId, (session) => ({ ...session, status: "idle" }))
     await saveCheckpoint(sessionId, runtime.agent)
+    completed = result.stopReason === "end_turn"
   } catch (error) {
     stream.flush()
     const message =
@@ -536,7 +538,7 @@ export async function send(
   }
 
   const stopped = cancelled.delete(sessionId)
-  if (stopped) return
+  if (stopped || !completed) return
   if (findSession(getState(), sessionId)?.status !== "idle") return
   const next = shiftQueue(sessionId)
   if (next) await send(sessionId, next.text, next.images)
