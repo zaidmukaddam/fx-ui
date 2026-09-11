@@ -10,6 +10,7 @@ import {
 import { listWorkspaceFiles } from "../../tools"
 import { loadSkills, type SkillCommand } from "../../workspace/skills"
 import { MENTION_RESULTS, rank } from "./shared"
+import { useT } from "../../ui/i18n"
 import type { Suggestion } from "./tokens"
 
 type Index = { root: string; files: string[] }
@@ -36,6 +37,7 @@ export function useTokenPicker(
   const [commands, setCommands] = useState<Commands | null>(null)
   const [highlighted, setHighlighted] = useState(0)
   const [dismissed, setDismissed] = useState(false)
+  const t = useT()
 
   const files = index?.root === root ? index.files : null
   const skills = commands?.root === root ? commands.entries : []
@@ -69,13 +71,13 @@ export function useTokenPicker(
   const empty =
     open === "@"
       ? files === null
-        ? "Reading the workspace…"
+        ? t("mention.reading")
         : mention?.query
-          ? `No file matches ${mention.query}`
-          : "No files in this workspace"
+          ? t("mention.noFileMatch", { query: mention.query })
+          : t("mention.noFiles")
       : command?.query
-        ? `No skill named ${command.query}`
-        : "No skills in this workspace"
+        ? t("mention.noSkillMatch", { query: command.query })
+        : t("mention.noSkills")
 
   const readWorkspace = () => {
     void listWorkspaceFiles(root).then((found) => setIndex({ root, files: found }))

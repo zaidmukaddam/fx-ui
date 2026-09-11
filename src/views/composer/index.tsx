@@ -4,6 +4,7 @@ import { color, columnFor, FONT, nativeTheme, radius, space, text } from "../../
 import { IconButton, Thumbnail } from "../../ui/ui"
 import { canAnswer, setAttachments, useApp, type Session } from "../../store"
 import { CAN_PICK_IMAGES } from "../../workspace/images"
+import { useT } from "../../ui/i18n"
 import { ContextMeter } from "./context"
 import {
   AttachMenu,
@@ -52,6 +53,7 @@ export function Composer({
   onStop: () => void
 }) {
   const { column, gutter } = columnFor(paneWidth)
+  const t = useT()
   const [draft, setDraft] = useState("")
   const picker = useTokenPicker(draft, setDraft, root)
   const state = useApp()
@@ -79,7 +81,7 @@ export function Composer({
     <IconButton
       icon="square"
       size={SEND_SIZE}
-      tooltip="Stop  ⌘."
+      tooltip={t("composer.stopTip")}
       testId="stop"
       tooltipSide="top"
       tooltipAlign="end"
@@ -90,7 +92,7 @@ export function Composer({
     <IconButton
       glyph="⏎"
       size={SEND_SIZE}
-      tooltip="Send ⏎"
+      tooltip={t("composer.sendTip")}
       testId="send"
       tooltipSide="top"
       tooltipAlign="end"
@@ -196,10 +198,10 @@ export function Composer({
             value={draft}
             placeholder={
               running
-                ? "Running · ⌘. to stop"
+                ? t("composer.running")
                 : readyToAnswer
-                  ? "Ask fx to change something"
-                  : "Add a key in Settings to send"
+                  ? t("composer.ask")
+                  : t("composer.addKey")
             }
             minRows={1}
             maxRows={12}
@@ -240,7 +242,7 @@ export function Composer({
             <IconButton
               icon="plus"
               size={24}
-              tooltip="Attach a file  @"
+              tooltip={t("composer.attachTip")}
               testId="attach-file"
               tooltipSide="top"
               tooltipAlign="start"

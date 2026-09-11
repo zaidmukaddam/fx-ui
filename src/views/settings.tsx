@@ -21,12 +21,14 @@ import {
 } from "../agent/oauth"
 import { loadSkills } from "../workspace/skills"
 import { checkForUpdate, relaunch } from "../update"
+import { useT, LANGUAGES, resolveLang } from "../ui/i18n"
 import {
   DEFAULT_MODEL,
   DIR,
   apiKeySource,
   findSession,
   findWorkspace,
+  setLang,
   setSettings,
   setState,
   type Account,
@@ -44,7 +46,9 @@ import {
   titlebarBand,
   TRAFFIC_LIGHT_INSET,
 } from "../ui/theme"
-import { Button, Kbd, Label, Paragraph, TextField } from "../ui/ui"
+import { Button, Kbd, Label, Paragraph, TextField, overlayStyle } from "../ui/ui"
+import { Icon } from "../ui/icons"
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@gpuix/react/select"
 
 type Server = ReturnType<typeof listMcpServers>[number]
 
@@ -61,6 +65,7 @@ function needsSetup(state: AppState): boolean {
 }
 
 function SetupBanner({ state }: { state: AppState }) {
+  const t = useT()
   if (!needsSetup(state)) return null
   return (
     <div
@@ -77,10 +82,10 @@ function SetupBanner({ state }: { state: AppState }) {
       }}
     >
       <Label size={text.small} color={color.text}>
-        Nothing can answer a prompt yet
+        {t("settings.setup.title")}
       </Label>
       <Paragraph size={text.micro} color={color.ghost}>
-        Paste an AI Gateway key or sign in to Grok or Codex below.
+        {t("settings.setup.desc")}
       </Paragraph>
     </div>
   )
@@ -160,6 +165,7 @@ function masked(key: string): string {
 }
 
 function ApiKeyRow({ state }: { state: AppState }) {
+  const t = useT()
   const fromEnv = Boolean(process.env.AI_GATEWAY_API_KEY)
   const [draft, setDraft] = useState<string | null>(null)
   const editing = draft !== null
@@ -173,20 +179,20 @@ function ApiKeyRow({ state }: { state: AppState }) {
 
   return (
     <Row
-      title="AI Gateway API key"
+      title={t("settings.apiKey.title")}
       detail={
         fromEnv
-          ? "Taken from AI_GATEWAY_API_KEY in the environment, which wins over a saved one."
+          ? t("settings.apiKey.fromEnv")
           : state.apiKey
-            ? `${masked(state.apiKey)} · saved in ~/.fx-ui/state.json, readable only by you.`
-            : "Needed for every model the Gateway serves. A subscription below needs no key."
+            ? t("settings.apiKey.saved", { masked: masked(state.apiKey) })
+            : t("settings.apiKey.needed")
       }
       expanded={
         editing ? (
           <TextField
             testId="api-key"
             value={draft}
-            placeholder="vck_…"
+            placeholder={t("settings.apiKeyPlaceholder")}
             onChange={setDraft}
             onSubmit={save}
           />
@@ -195,9 +201,9 @@ function ApiKeyRow({ state }: { state: AppState }) {
     >
       {fromEnv ? null : editing ? (
         <>
-          <Button label="Cancel" variant="ghost" size="sm" onClick={() => setDraft(null)} />
+          <Button label={t("btn.cancel")} variant="ghost" size="sm" onClick={() => setDraft(null)} />
           <Button
-            label="Save"
+            label={t("settings.save")}
             variant="primary"
             size="sm"
             testId="settings-save-key"
@@ -209,7 +215,7 @@ function ApiKeyRow({ state }: { state: AppState }) {
         <>
           {state.apiKey ? (
             <Button
-              label="Clear"
+              label={t("settings.clear")}
               variant="ghost"
               size="sm"
               testId="settings-clear-key"
@@ -217,7 +223,7 @@ function ApiKeyRow({ state }: { state: AppState }) {
             />
           ) : null}
           <Button
-            label={state.apiKey ? "Replace" : "Add"}
+            label={state.apiKey ? t("settings.replace") : t("settings.add")}
             size="sm"
             variant={state.apiKey ? "secondary" : "primary"}
             testId="settings-api-key"
@@ -230,6 +236,7 @@ function ApiKeyRow({ state }: { state: AppState }) {
 }
 
 function AddMcpServerRow({ onChanged }: { onChanged: () => void }) {
+  const t = useT()
   const [name, setName] = useState<string | null>(null)
   const [source, setSource] = useState("")
   const [error, setError] = useState<string | null>(null)
@@ -254,11 +261,8 @@ function AddMcpServerRow({ onChanged }: { onChanged: () => void }) {
 
   return (
     <Row
-      title="Add a server"
-      detail={
-        error ??
-        "A URL for a remote server, or the command that starts a local one. It connects straight away."
-      }
+      title={t("settings.addServer.title")}
+      detail={error ?? t("settings.addServer.desc")}
       danger={Boolean(error)}
       expanded={
         adding ? (
@@ -266,14 +270,14 @@ function AddMcpServerRow({ onChanged }: { onChanged: () => void }) {
             <TextField
               testId="mcp-name"
               value={name}
-              placeholder="linear"
+              placeholder={t("settings.addServer.namePlaceholder")}
               onChange={setName}
               onSubmit={save}
             />
             <TextField
               testId="mcp-source"
               value={source}
-              placeholder="https://mcp.linear.app/mcp or npx -y some-server"
+              placeholder={t("settings.addServer.sourcePlaceholder")}
               onChange={setSource}
               onSubmit={save}
             />
@@ -283,9 +287,9 @@ function AddMcpServerRow({ onChanged }: { onChanged: () => void }) {
     >
       {adding ? (
         <>
-          <Button label="Cancel" variant="ghost" size="sm" onClick={cancel} />
+          <Button label={t("btn.cancel")} variant="ghost" size="sm" onClick={cancel} />
           <Button
-            label="Add"
+            label={t("settings.add")}
             variant="primary"
             size="sm"
             hint="↩"
@@ -295,7 +299,7 @@ function AddMcpServerRow({ onChanged }: { onChanged: () => void }) {
         </>
       ) : (
         <Button
-          label="Add"
+          label={t("settings.add")}
           size="sm"
           testId="mcp-add"
           onClick={() => {
@@ -315,6 +319,7 @@ function McpServerRow({
   server: Server
   onChanged: () => void
 }) {
+  const t = useT()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -336,18 +341,18 @@ function McpServerRow({
   const detail = error
     ? error
     : busy
-      ? "Waiting for the browser to finish the sign-in."
+      ? t("settings.mcpRow.waiting")
       : server.url
         ? server.signedIn
-          ? `${new URL(server.url).host} · signed in · ${server.tools} tools`
-          : `${new URL(server.url).host} · not signed in. Its tools stay out of the session until you are.`
-        : `Local · ${server.tools} tools`
+          ? t("settings.mcpRow.signedIn", { host: new URL(server.url).host, tools: server.tools })
+          : t("settings.mcpRow.notSignedIn", { host: new URL(server.url).host })
+        : t("settings.mcpRow.local", { tools: server.tools })
 
   return (
     <Row title={server.name} detail={detail}>
       {server.url ? (
         <Button
-          label={server.signedIn ? "Sign out" : "Sign in"}
+          label={server.signedIn ? t("settings.signOut") : t("settings.signIn")}
           size="sm"
           disabled={busy}
           testId={`mcp-${server.signedIn ? "signout" : "signin"}-${server.name}`}
@@ -362,7 +367,7 @@ function McpServerRow({
         />
       ) : null}
       <Button
-        label="Remove"
+        label={t("settings.remove")}
         variant="ghost"
         size="sm"
         disabled={busy}
@@ -388,6 +393,7 @@ function ProviderRow({
   provider: ProviderId
   onChanged: () => void
 }) {
+  const t = useT()
   const spec = PROVIDERS[provider]
   const [pending, setPending] = useState<PendingSignIn | null>(null)
   const [code, setCode] = useState("")
@@ -423,12 +429,12 @@ function ProviderRow({
   }
 
   const detail = pending
-    ? "Waiting for the browser. If it shows a code to copy instead, paste it here."
+    ? t("settings.provider.waiting")
     : account
-      ? `Signed in${account.account ? ` as ${account.account}` : ""}. Its models are in the picker.`
+      ? t("settings.provider.signedIn", { as: account.account ? ` as ${account.account}` : "" })
       : viaCli
-        ? `Signed in with the fx CLI, which only that runtime can use. Sign in here to reach it in this process.`
-        : `Run turns on your ${spec.label} subscription instead of the Gateway key.`
+        ? t("settings.provider.viaCli")
+        : t("settings.provider.run", { label: spec.label })
 
   return (
     <Row
@@ -440,7 +446,7 @@ function ProviderRow({
           <TextField
             testId={`code-${provider}`}
             value={code}
-            placeholder="Paste the code the browser showed"
+            placeholder={t("settings.provider.waiting")}
             onChange={setCode}
             onSubmit={paste}
           />
@@ -450,7 +456,7 @@ function ProviderRow({
       {pending ? (
         <>
           <Button
-            label="Cancel"
+            label={t("btn.cancel")}
             variant="ghost"
             size="sm"
             onClick={() => {
@@ -460,7 +466,7 @@ function ProviderRow({
             }}
           />
           <Button
-            label="Finish"
+            label={t("settings.finish")}
             variant="primary"
             size="sm"
             disabled={!code.trim()}
@@ -471,7 +477,7 @@ function ProviderRow({
         </>
       ) : account ? (
         <Button
-          label="Sign out"
+          label={t("settings.signOut")}
           size="sm"
           testId={`settings-signout-${provider}`}
           onClick={() => {
@@ -481,7 +487,7 @@ function ProviderRow({
         />
       ) : (
         <Button
-          label="Sign in"
+          label={t("settings.signIn")}
           size="sm"
           variant="primary"
           testId={`settings-signin-${provider}`}
@@ -493,40 +499,118 @@ function ProviderRow({
 }
 
 function KiroRow({ account }: { account: Account | undefined }) {
+  const t = useT()
   return (
     <Row
       title="Kiro"
-      detail={
-        account
-          ? "Using your Kiro IDE / Kiro CLI login on this machine. Its models are in the picker."
-          : "No Kiro login found on this machine. Sign in with Kiro IDE or Kiro CLI, then reopen settings."
-      }
+      detail={account ? t("settings.kiro.detected") : t("settings.kiro.notFound")}
     >
       <Label size={text.small} color={account ? color.tertiary : color.ghost}>
-        {account ? "Detected" : "Not found"}
+        {account ? t("settings.kiro.detectedTag") : t("settings.kiro.notFoundTag")}
       </Label>
     </Row>
   )
 }
 
+function LanguageRow({ state }: { state: AppState }) {
+  const t = useT()
+  const effective = resolveLang(state.lang)
+  const options: { value: string; label: string }[] = [
+    { value: "", label: t("settings.lang.automatic") },
+    ...LANGUAGES.map((entry) => ({ value: entry.value, label: entry.label })),
+  ]
+  const current = options.find((entry) => entry.value === state.lang) ?? options[0]!
+  const currentLabel =
+    state.lang === "" ? `${t("settings.lang.automatic")} · ${effective}` : current.label
+  return (
+    <Row title={t("settings.lang.title")} detail={t("settings.lang.desc")}>
+      <Select value={state.lang} onValueChange={(value) => setLang(String(value))}>
+        <SelectTrigger asChild>
+          <div
+            testId="language-picker"
+            style={{
+              display: "flex",
+              flexDirection: "row",
+              alignItems: "center",
+              gap: space.sm,
+              height: 24,
+              paddingLeft: space.sm,
+              paddingRight: space.sm,
+              borderRadius: radius.sm,
+              cursor: "pointer",
+              userSelect: "none",
+              hover: { backgroundColor: color.hover },
+            }}
+          >
+            <Label size={text.small} color={color.tertiary}>
+              {currentLabel}
+            </Label>
+            <Icon name="chevronDown" size={11} color={color.ghost} />
+          </div>
+        </SelectTrigger>
+        <SelectContent
+          side="bottom"
+          align="end"
+          sideOffset={8}
+          style={{ ...overlayStyle(space.xs, space.xs), width: 240 }}
+        >
+          {options.map((option) => (
+            <SelectItem
+              key={option.value || "auto"}
+              value={option.value}
+              testId={`language-${option.value || "auto"}`}
+              style={(itemState) => ({
+                display: "flex",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: space.md,
+                flexShrink: 0,
+                paddingLeft: space.md,
+                paddingRight: space.md,
+                paddingTop: space.sm,
+                paddingBottom: space.sm,
+                borderRadius: radius.sm,
+                cursor: "pointer",
+                backgroundColor: itemState.highlighted ? color.selected : undefined,
+              })}
+            >
+              {(itemState) => (
+                <>
+                  <Label grow size={text.small} color={color.text}>
+                    {option.label}
+                  </Label>
+                  {itemState.selected ? (
+                    <Icon name="check" size={11} color={color.text} />
+                  ) : null}
+                </>
+              )}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </Row>
+  )
+}
+
 function UpdateRow({ update }: { update: UpdateStatus }) {
+  const t = useT()
   return (
     <Row
-      title="Version"
+      title={t("settings.version.title")}
       detail={
         update.stage === "downloading"
-          ? "Downloading the update…"
+          ? t("settings.version.downloading")
           : update.stage === "ready"
-            ? `Update ${update.version} downloaded`
+            ? t("settings.version.ready", { version: update.version })
             : update.stage === "error"
               ? update.message
-              : "fx-ui"
+              : t("settings.version.idle")
       }
       danger={update.stage === "error"}
     >
       {update.stage === "ready" ? (
         <Button
-          label="Restart to update"
+          label={t("settings.version.restart")}
           variant="primary"
           size="sm"
           testId="restart-to-update"
@@ -542,7 +626,7 @@ function UpdateRow({ update }: { update: UpdateStatus }) {
             {version}
           </Label>
           <Button
-            label="Check for updates"
+            label={t("settings.version.check")}
             size="sm"
             testId="check-for-updates"
             onClick={() => void checkForUpdate()}
@@ -554,6 +638,7 @@ function UpdateRow({ update }: { update: UpdateStatus }) {
 }
 
 export function Settings({ state }: { state: AppState }) {
+  const t = useT()
   const [loaded, setLoaded] = useState<Loaded | null>(null)
 
   const focused = state.panes[state.focusedPane]?.sessionId ?? null
@@ -599,7 +684,7 @@ export function Settings({ state }: { state: AppState }) {
       }}
     >
       <SetupBanner state={state} />
-      <Section title="Models">
+      <Section title={t("settings.section.models")}>
         <ApiKeyRow state={state} />
         {(["grok", "codex"] as const).map((provider) => (
           <ProviderRow
@@ -612,19 +697,19 @@ export function Settings({ state }: { state: AppState }) {
         ))}
         <KiroRow account={state.accounts.find((entry) => entry.provider === "kiro")} />
         <Row
-          title="New sessions start on"
+          title={t("settings.startsOn.title")}
           detail={
             state.defaultModel
-              ? "Every new session opens on this model, whatever the last one used."
-              : `A new session follows the last one in that workspace. The first opens on a signed-in subscription's own model, or ${DEFAULT_MODEL.name} on the Gateway.`
+              ? t("settings.startsOn.pinned")
+              : t("settings.startsOn.auto", { model: DEFAULT_MODEL.name })
           }
         >
           <ModelChoice
             testId="default-model"
             value={keyOf(state.defaultModel)}
-            label="Automatic"
+            label={t("settings.startsOn.automatic")}
             maxWidth={220}
-            automatic="Follow the last session"
+            automatic={t("settings.startsOn.followLast")}
             onChange={(chosen) =>
               setState((current) => ({ ...current, defaultModel: chosen }))
             }
@@ -632,29 +717,33 @@ export function Settings({ state }: { state: AppState }) {
         </Row>
       </Section>
 
-      <Section title="Runtime">
+      <Section title={t("settings.section.language")}>
+        <LanguageRow state={state} />
+      </Section>
+
+      <Section title={t("settings.section.runtime")}>
         <Row
-          title="Run through the fx CLI"
+          title={t("settings.cli.title")}
           detail={
             state.useCli
               ? loaded
                 ? loaded.fx
-                  ? `Using ${FX_BINARY} ${loaded.fx} · ${loaded.fxStatus}`
+                  ? t("settings.cli.on", { binary: FX_BINARY, version: loaded.fx, status: loaded.fxStatus })
                   : loaded.fxStatus
-                : "Reading the binary…"
-              : "Hands turns to the fx binary, which carries providers this app does not."
+                : t("settings.cli.reading")
+              : t("settings.cli.off")
           }
         >
           <Button
-            label={state.useCli ? "Turn off" : "Turn on"}
+            label={state.useCli ? t("settings.cli.turnOff") : t("settings.cli.turnOn")}
             size="sm"
             testId="settings-use-cli"
             onClick={() => void setUseCli(!state.useCli).then(reload)}
           />
         </Row>
         <Row
-          title="Permission mode"
-          detail="Set per session, from the composer. `ask` stops before every write and command."
+          title={t("settings.permission.title")}
+          detail={t("settings.permission.desc")}
         >
           <Label size={text.small} color={color.tertiary}>
             {findSession(state, focused)?.mode ?? "ask"}
@@ -662,32 +751,32 @@ export function Settings({ state }: { state: AppState }) {
         </Row>
       </Section>
 
-      <Section title="Extensions">
+      <Section title={t("settings.section.extensions")}>
         <Row
-          title="Skills"
+          title={t("settings.skills.title")}
           detail={
             !loaded
-              ? "Reading…"
+              ? t("settings.skills.reading")
               : loaded.skills.length > 0
                 ? loaded.skills.join(", ")
-                : "None in this workspace. Add SKILL.md files under .fx/skills or ~/.fx/skills."
+                : t("settings.skills.none")
           }
         >
           <Button
-            label="Reload"
+            label={t("settings.reload")}
             size="sm"
             testId="settings-reload"
             onClick={() => void reloadSkills().then(changed)}
           />
         </Row>
         <Row
-          title="MCP servers"
+          title={t("settings.mcp.title")}
           detail={
             !loaded
-              ? "Reading…"
+              ? t("settings.mcp.reading")
               : loaded.servers.length > 0
-                ? "Configured in ~/.fx-ui/mcp.json, never from a workspace. A remote server's tools ask before they run."
-                : "None configured. Add them to ~/.fx-ui/mcp.json: a `command` for a local one, a `url` for a remote one."
+                ? t("settings.mcp.some")
+                : t("settings.mcp.none")
           }
         />
         {(loaded?.servers ?? []).map((server) => (
@@ -700,11 +789,14 @@ export function Settings({ state }: { state: AppState }) {
         <AddMcpServerRow onChanged={changed} />
       </Section>
 
-      <Section title="About">
+      <Section title={t("settings.section.about")}>
         <UpdateRow update={state.update} />
-        <Row title="State" detail={DIR}>
+        <Row title={t("settings.state.title")} detail={DIR}>
           <Label size={text.small} color={color.ghost}>
-            {`${state.workspaces.length} workspaces · ${state.sessions.length} sessions`}
+            {t("settings.state.detail", {
+              workspaces: state.workspaces.length,
+              sessions: state.sessions.length,
+            })}
           </Label>
         </Row>
       </Section>
@@ -721,6 +813,7 @@ export function SettingsPage({
   needsInset: boolean
   width: number
 }) {
+  const t = useT()
   const { column, gutter } = columnFor(width)
   return (
     <div
@@ -748,14 +841,14 @@ export function SettingsPage({
         }}
       >
         <Label size={text.body} color={color.text}>
-          Settings
+          {t("settings.title")}
         </Label>
         <div style={{ flexGrow: 1, minWidth: 0 }} />
         <Label size={text.micro} color={color.ghost}>
-          Saved as you go
+          {t("settings.savedAsYouGo")}
         </Label>
         <Kbd keys="esc" />
-        <Button label="Done" size="sm" testId="settings-done" onClick={() => setSettings(false)} />
+        <Button label={t("settings.done")} size="sm" testId="settings-done" onClick={() => setSettings(false)} />
       </div>
 
       <div

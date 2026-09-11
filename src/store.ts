@@ -156,6 +156,7 @@ export type AppState = {
   sidebarCollapsed: boolean
   apiKey: string | null
   useCli: boolean
+  lang: string
   accounts: Account[]
   models: Model[]
   defaultModel: Chosen | null
@@ -210,6 +211,7 @@ function emptyState(): AppState {
     sidebarCollapsed: false,
     apiKey: process.env.AI_GATEWAY_API_KEY ?? null,
     useCli: false,
+    lang: "",
     accounts: [],
     models: [],
     defaultModel: null,
@@ -233,6 +235,7 @@ const PERSISTED = [
   "sidebarCollapsed",
   "apiKey",
   "useCli",
+  "lang",
   "models",
   "defaultModel",
 ] as const satisfies readonly (keyof AppState)[]
@@ -645,6 +648,10 @@ export function setDialog(dialog: Dialog | null): void {
 
 export function setPalette(open: boolean): void {
   setOverlay(open ? { kind: "palette" } : null)
+}
+
+export function setLang(lang: string): void {
+  setState((current) => ({ ...current, lang }))
 }
 
 export function setSettings(open: boolean): void {

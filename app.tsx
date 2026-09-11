@@ -24,6 +24,7 @@ import {
 import { NoSession, Transcript } from "./src/views/transcript"
 import { Badge, Explain, IconButton, Label, TooltipProvider } from "./src/ui/ui"
 import { isClean, refreshGitStatus, summarise } from "./src/workspace/git"
+import { useT } from "./src/ui/i18n"
 import { CAN_PICK_IMAGES, pasteImage } from "./src/workspace/images"
 import { useMountEffect } from "./src/ui/hooks"
 import {
@@ -46,6 +47,7 @@ const MIN_SPLIT_RATIO = 0.25
 const DIVIDER_WIDTH = 5
 
 function BranchChip({ workspaceId }: { workspaceId: string }) {
+  const t = useT()
   const status = useApp().git[workspaceId]
   useMountEffect(() => {
     void refreshGitStatus(workspaceId)
@@ -57,8 +59,8 @@ function BranchChip({ workspaceId }: { workspaceId: string }) {
   return (
     <Explain
       lines={[
-        summarise(status),
-        dirty ? "Uncommitted changes in this workspace" : "Nothing to commit",
+        summarise(status, t),
+        dirty ? t("git.uncommitted") : t("git.nothingToCommit"),
       ]}
     >
       <div
@@ -110,6 +112,7 @@ function PaneHeader({
   onPeek?: () => void
   canPin?: boolean
 }) {
+  const t = useT()
   const sessionId = state.panes[index]?.sessionId ?? null
   const session = findSession(state, sessionId)
   const workspace = findWorkspace(state, session?.workspaceId ?? null)
@@ -133,7 +136,7 @@ function PaneHeader({
         {onPeek && index === 0 ? (
           <IconButton
             icon="panelLeft"
-            tooltip={canPin ? "Show sidebar  ⌘B" : "Open sidebar"}
+            tooltip={canPin ? t("chrome.showSidebar") : t("chrome.openSidebar")}
             testId="show-sidebar"
             onClick={
               canPin
@@ -198,7 +201,7 @@ function PaneHeader({
         ) : (
           <IconButton
             icon="panelRightClose"
-            tooltip="Close this pane  ⌘\"
+            tooltip={t("chrome.closePane")}
             testId="close-split"
             onClick={() => setSplit(false)}
           />
