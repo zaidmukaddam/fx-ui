@@ -217,10 +217,12 @@ pauses a connection everywhere. Tokens and OAuth stay in `~/.fx-ui`; a
 workspace file that only names connection ids is a later step, and automatic
 `.mcp.json` discovery is not in this version.
 
-A remote server's tools ask before they run. Changing a connection's URL or
-command issues a new approval scope, so an old "always allow" does not follow
-the new endpoint. Env and headers are not part of that check, so rotating a
-token in the file does not revoke the grant.
+A remote server's tools ask before they run. Approval scopes include the
+connection id and its resolved URL, or its resolved command, arguments and
+working directory. Changing those values, including through environment or
+file variables, requires renewed approval. Token-only changes to env or
+headers do not revoke the grant. A connection whose variables cannot be
+resolved loses its old grant without preventing other connections from loading.
 
 Import in the MCP settings row finds global configs from Cursor
 (`~/.cursor/mcp.json`), Devin (`~/.config/devin/mcp_config.json`, or the older

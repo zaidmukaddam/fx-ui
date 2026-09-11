@@ -37,6 +37,8 @@ import {
   authorisedServers,
   beginServerSignIn,
   connectionsToLoad,
+  findMcpTool,
+  listMcpTools,
   loadMcp,
   mcpGrantLabel,
   mcpGrantScope,
@@ -1364,15 +1366,24 @@ function reply(id, result) {
     const port = (server.address() as { port: number }).port
 
     const file = path.join(tempDir(), "mcp.json")
+    const endpointFile = path.join(tempDir(), "endpoint")
+    const endpoint = `http://127.0.0.1:${port}/mcp`
+    writeFileSync(endpointFile, endpoint)
     writeFileSync(
       file,
-      JSON.stringify({ mcpServers: { remote: { url: `http://127.0.0.1:${port}/mcp` } } }),
+      JSON.stringify({ mcpServers: { remote: { url: `\${file:${endpointFile}}` } } }),
     )
 
     const loaded = await loadMcp(file)
     try {
       expect(loaded.problems).toEqual([])
       expect(loaded.names).toEqual(["remote"])
+      const scope = mcpGrantScope("remote", { url: endpoint })
+      expect(loaded.tools[0]!.scope).toBe(scope)
+      expect(pruneMcpGrants([scope], file)).toEqual([scope])
+      writeFileSync(endpointFile, `${endpoint}/changed`)
+      expect(pruneMcpGrants([scope], file)).toEqual([])
+      expect(loaded.tools[0]!.scope).toBe(scope)
       const ping = loaded.tools.find((entry) => entry.tool.name.includes("ping"))?.tool
       expect(ping).toBeDefined()
 
@@ -1430,6 +1441,8 @@ function reply(id, result) {
       expect(loaded.problems).toEqual([])
       expect(loaded.tools).toHaveLength(70)
       const last = loaded.tools.at(-1)!.tool.name
+      expect(listMcpTools(`${root}/unloaded-workspace`)).toEqual([])
+      expect(findMcpTool(last, `${root}/unloaded-workspace`)).toBeUndefined()
       expect(await run(tools.capability_search!, { query: "tool_69" })).toContain(last)
       expect(await run(tools.mcp_select_tool!, { name: last })).toContain("mcp_call_tool")
       const denied = run(tools.mcp_call_tool!, { name: last, arguments: { value: "denied" } })
@@ -1506,9 +1519,9 @@ function reply(id, result) {
       return Response.json({ jsonrpc: "2.0", id: message.id, result })
     }) as typeof fetch
     try {
-      const loaded = await acquireMcp(file)
+      const { tools, root } = seed("full-access")
+      const loaded = await acquireMcp(file, root)
       expect(loaded.problems).toEqual([])
-      const { tools } = seed("full-access")
       await expect(run(tools.mcp_select_tool!, { name: "abc" })).rejects.toThrow(/shared by multiple servers/)
       await expect(run(tools.mcp_call_tool!, { name: "abc", arguments: {} })).rejects.toThrow(/shared by multiple servers/)
       expect(calls).toEqual([])
@@ -1869,7 +1882,7 @@ function reply(id, result) {
     expect(readConnections(file).map((entry) => entry.name)).toEqual(["keep"])
   })
 
-  it("scopes MCP grants to the connection id and endpoint, not env or headers", () => {
+  it("scopes MCP grants to the connection id and execution target, not token headers", () => {
     const file = path.join(tempDir(), "mcp.json")
     const url = "https://mcp.linear.app/mcp"
     writeFileSync(file, JSON.stringify({ mcpServers: { linear: { id: "lin-1", url, headers: { Authorization: "old" } } } }))
@@ -1884,6 +1897,49 @@ function reply(id, result) {
     expect(pruneMcpGrants(["write", "mcp:linear", scope], file)).toEqual(["write", scope])
     writeFileSync(file, JSON.stringify({ mcpServers: { linear: { id: "lin-1", url: "https://mcp.linear.app/other" } } }))
     expect(pruneMcpGrants(["write", scope], file)).toEqual(["write"])
+  })
+
+  it("revokes grants when an environment variable changes the resolved endpoint", () => {
+    const file = path.join(tempDir(), "mcp.json")
+    const config = { url: "https://${env:FX_TEST_MCP_HOST}/mcp" }
+    writeFileSync(file, JSON.stringify({ mcpServers: { remote: config } }))
+    try {
+      vi.stubEnv("FX_TEST_MCP_HOST", "first.example")
+      const scope = mcpGrantScope("remote", resolveMcpConfig(config))
+      expect(pruneMcpGrants([scope], file)).toEqual([scope])
+      vi.stubEnv("FX_TEST_MCP_HOST", "second.example")
+      expect(pruneMcpGrants([scope], file)).toEqual([])
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it("revokes local grants when resolved args, command, or working directory change", () => {
+    const file = path.join(tempDir(), "mcp.json")
+    const envFile = path.join(tempDir(), "server.env")
+    const config = { command: "${env:SERVER}", args: ["${env:PROJECT}"], cwd: "${env:ROOT}", envFile }
+    writeFileSync(file, JSON.stringify({ mcpServers: { local: config } }))
+    const original = "SERVER=./server\nPROJECT=one\nROOT=/first\nTOKEN=old\n"
+    writeFileSync(envFile, original)
+    const scope = mcpGrantScope("local", resolveMcpConfig(config))
+    for (const [before, after] of [["./server", "./other"], ["PROJECT=one", "PROJECT=two"], ["/first", "/second"]]) {
+      writeFileSync(envFile, original.replace(before!, after!))
+      expect(pruneMcpGrants([scope], file)).toEqual([])
+    }
+    writeFileSync(envFile, original.replace("TOKEN=old", "TOKEN=new"))
+    expect(pruneMcpGrants([scope], file)).toEqual([scope])
+  })
+
+  it("drops unresolvable grants without blocking other connections", () => {
+    const file = path.join(tempDir(), "mcp.json")
+    const config = { command: "./server", args: [], cwd: "/first" }
+    const scope = mcpGrantScope("local", config)
+    writeFileSync(file, JSON.stringify({ mcpServers: {
+      local: { ...config, envFile: path.join(tempDir(), "missing.env") },
+      remote: { url: "https://example.com/mcp" },
+    } }))
+    const remote = mcpGrantScope("remote", { url: "https://example.com/mcp" })
+    expect(pruneMcpGrants(["write", scope, remote], file)).toEqual(["write", remote])
   })
 })
 

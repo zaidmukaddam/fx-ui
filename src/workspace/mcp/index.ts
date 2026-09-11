@@ -64,7 +64,7 @@ const EMPTY: LoadedMcp = {
 }
 
 function clientFor(connection: Connection): McpSession {
-  const resolved = resolveMcpConfig(connection.config)
+  const resolved = connection.config
   return new McpSession(
     connection.name,
     isRemote(resolved)
@@ -87,13 +87,14 @@ export async function loadMcp(file = MCP_CONFIG_FILE, workspacePath?: string): P
     connections.map(async (connection) => {
       let client: McpSession | null = null
       try {
-        client = clientFor(connection)
+        const resolved = resolveMcpConfig(connection.config)
+        const scope = mcpGrantScope(connection.id, resolved)
+        client = clientFor({ ...connection, config: resolved })
         await client.initialize()
         const adapter = await createMcpAdapter(client, {
           prefix: connection.name.replace(/[^A-Za-z0-9_-]/g, "_"),
           maxTools: 1024,
         })
-        const scope = mcpGrantScope(connection.id, connection.config)
         for (const tool of adapter.tools as HostTool[]) {
           tools.push({ server: connection.name, id: connection.id, scope, tool })
         }
@@ -143,13 +144,10 @@ function poolKey(file: string, workspacePath?: string): string {
 }
 
 function liveSets(workspacePath?: string): LoadedMcp[] {
-  const all = [...pools.values()].map((pool) => pool.live).filter((live): live is LoadedMcp => live !== null)
-  if (!workspacePath) return all
-  const matched = [...pools.entries()]
-    .filter(([key]) => key.endsWith(`\0${workspacePath}`))
+  return [...pools.entries()]
+    .filter(([key]) => !workspacePath || key.endsWith(`\0${workspacePath}`))
     .map(([, pool]) => pool.live)
     .filter((live): live is LoadedMcp => live !== null)
-  return matched.length ? matched : all
 }
 
 export async function acquireMcp(file = MCP_CONFIG_FILE, workspacePath?: string): Promise<McpLease> {

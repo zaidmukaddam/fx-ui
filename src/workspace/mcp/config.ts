@@ -4,6 +4,7 @@ import path from "node:path"
 import { parse, type ParseError } from "jsonc-parser"
 
 import { DIR, newId } from "../../store"
+import { resolveMcpConfig } from "./variables"
 
 export const MCP_CONFIG_FILE = path.join(DIR, "mcp.json")
 
@@ -94,19 +95,28 @@ export function connectionsToLoad(file = MCP_CONFIG_FILE, workspacePath?: string
   return all.filter((connection) => allowed.has(connection.id))
 }
 
-export function connectionFingerprint(config: ServerConfig): string {
-  const material = isRemote(config)
-    ? `url:${config.url}`
-    : `cmd:${config.command}\0${config.args.join("\0")}`
+export function connectionFingerprint(resolved: ServerConfig): string {
+  const material = isRemote(resolved)
+    ? JSON.stringify(["url", resolved.url])
+    : JSON.stringify(["cmd", resolved.command, resolved.args, path.resolve(resolved.cwd ?? process.cwd())])
   return createHash("sha256").update(material).digest("hex").slice(0, 12)
 }
 
-export function mcpGrantScope(id: string, config: ServerConfig): string {
-  return `mcp:${id}:${connectionFingerprint(config)}`
+// Use the same resolved configuration snapshot that opens the connection.
+export function mcpGrantScope(id: string, resolved: ServerConfig): string {
+  return `mcp:${id}:${connectionFingerprint(resolved)}`
 }
 
 export function liveMcpGrantScopes(file = MCP_CONFIG_FILE): Set<string> {
-  return new Set(readConnections(file).map((connection) => mcpGrantScope(connection.id, connection.config)))
+  const scopes = new Set<string>()
+  for (const connection of readConnections(file)) {
+    try {
+      scopes.add(mcpGrantScope(connection.id, resolveMcpConfig(connection.config)))
+    } catch {
+      // An unresolvable connection cannot retain approval; loadMcp reports its error.
+    }
+  }
+  return scopes
 }
 
 export function pruneMcpGrants(grants: string[], file = MCP_CONFIG_FILE): string[] {
