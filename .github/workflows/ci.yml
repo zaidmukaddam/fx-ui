@@ -10,10 +10,19 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run test
-      - run: bun run build
+      - run: bun run package
+      - run: hdiutil verify dist/fx-*.dmg
+      - name: Verify packaged app
+        run: |
+          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/fx-dmg" dist/fx-*.dmg
+          trap 'hdiutil detach "$RUNNER_TEMP/fx-dmg"' EXIT
+          codesign --verify --deep --strict "$RUNNER_TEMP/fx-dmg/fx.app"

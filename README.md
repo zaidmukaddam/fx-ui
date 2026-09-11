@@ -20,6 +20,11 @@ bun run build    # build a standalone binary in dist/fx
 bun run package  # build dist/fx.app and dist/fx-<version>.dmg
 ```
 
+Packaging requires macOS, Xcode command-line tools, and Python 3.10 or newer.
+It installs pinned DMG build tools into `dist/dmg-tools`, draws a Retina
+installer background, and writes the Finder layout without opening Finder.
+The DMG uses LZMA compression and explicit volume headroom for reliable CI builds.
+
 ## Features
 
 - Workspaces, sessions and a split view

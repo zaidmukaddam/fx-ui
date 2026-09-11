@@ -1,5 +1,5 @@
 import { $ } from "bun"
-import { lstatSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
 const root = path.join(import.meta.dir, "..")
@@ -34,6 +34,9 @@ if (notary && identity === "-") {
   throw new Error("Notarizing needs SIGN_IDENTITY set to a Developer ID Application identity")
 }
 
+const dmgTools = path.join(dist, "dmg-tools")
+await $`python3 -m venv ${dmgTools}`
+await $`${path.join(dmgTools, "bin", "python")} -m pip install --disable-pip-version-check -r ${path.join(import.meta.dir, "dmg-requirements.txt")}`.quiet()
 await $`bun run build`.cwd(root)
 
 rmSync(app, { recursive: true, force: true })
@@ -75,17 +78,13 @@ writeFileSync(
 const hardened = identity === "-" ? [] : ["--options", "runtime", "--timestamp"]
 await $`codesign --force --sign ${identity} ${hardened} --entitlements ${entitlements} ${app}`.quiet()
 
-const stage = path.join(dist, "dmg")
 const dmg = path.join(dist, `fx-${pkg.version}.dmg`)
-rmSync(stage, { recursive: true, force: true })
-mkdirSync(stage)
-await $`ditto ${app} ${path.join(stage, "fx.app")}`
-symlinkSync("/Applications", path.join(stage, "Applications"))
+const background = path.join(dist, "dmg-background.tiff")
+await $`swift ${path.join(import.meta.dir, "dmg-background.swift")} ${background}`
 rmSync(dmg, { force: true })
-const imageMiB = Math.ceil(logicalSize(stage) * 1.25 / (1024 * 1024)) + 32
-console.log(`[package] creating a ${imageMiB} MiB disk image`)
-await $`hdiutil create -size ${`${imageMiB}m`} -fs HFS+ -volname fx -srcfolder ${stage} -ov -format UDZO ${dmg}`.quiet()
-rmSync(stage, { recursive: true })
+const imageMiB = Math.ceil((logicalSize(app) + lstatSync(background).size) * 1.25 / (1024 * 1024)) + 32
+console.log(`[package] creating a compressed disk image with ${imageMiB} MiB volume capacity`)
+await $`${path.join(dmgTools, "bin", "dmgbuild")} -s ${path.join(import.meta.dir, "dmg-settings.py")} -D ${`root=${root}`} -D ${`size=${imageMiB}m`} fx ${dmg}`
 if (identity !== "-") await $`codesign --force --sign ${identity} --timestamp ${dmg}`.quiet()
 
 if (notary) {
@@ -101,6 +100,6 @@ if (notary) {
 }
 
 console.log(
-  `[package] wrote ${path.relative(root, app)} and ${path.relative(root, dmg)}` +
+  `[package] wrote ${path.relative(root, app)} and ${path.relative(root, dmg)} (${(lstatSync(dmg).size / (1024 * 1024)).toFixed(1)} MiB download)` +
     (identity === "-" ? ", signed ad hoc" : notary ? ", signed and notarized" : ", signed"),
 )
