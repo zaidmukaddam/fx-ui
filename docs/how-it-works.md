@@ -242,6 +242,14 @@ speech bubble in its place means it is waiting on you, for an approval or an
 answer. A turn does not survive quitting the app: the conversation picks up
 from the last finished turn.
 
+### Queued prompts
+
+While a turn is running, Enter puts what you typed (and any attached images)
+on a list above the composer instead of sending it. × takes one off. A turn
+that finishes successfully sends the next item; stopping the turn, a failed
+request, a refusal, or hitting the output or step limit leaves the list.
+Enter on an empty composer sends the next one once nothing is running.
+
 ### Copying an answer
 
 The answer that ends a turn has a copy button under it.

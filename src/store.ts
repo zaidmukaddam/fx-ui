@@ -106,6 +106,12 @@ export type BackgroundCommand = {
   exit: number | null
 }
 
+export type QueuedPrompt = {
+  id: string
+  text: string
+  images: string[]
+}
+
 export type Chosen = {
   id: string
   provider: "grok" | "codex" | null
@@ -161,6 +167,7 @@ export type AppState = {
   defaultModel: Chosen | null
   background: Record<string, BackgroundCommand[]>
   attachments: Record<string, string[]>
+  queue: Record<string, QueuedPrompt[]>
   git: Record<string, GitStatus | null>
   limits: Record<string, PlanLimits>
   settingsOpen: boolean
@@ -215,6 +222,7 @@ function emptyState(): AppState {
     defaultModel: null,
     background: {},
     attachments: {},
+    queue: {},
     git: {},
     limits: {},
     settingsOpen: false,
@@ -591,6 +599,7 @@ export function removeSession(sessionId: string): void {
     panes: current.panes.map((pane) =>
       pane.sessionId === sessionId ? { sessionId: null } : pane,
     ),
+    queue: omitQueue(current.queue, sessionId),
   }))
 }
 
@@ -615,6 +624,9 @@ export function removeWorkspace(workspaceId: string): void {
         pane.sessionId && live.has(pane.sessionId)
           ? pane
           : { sessionId: null },
+      ),
+      queue: Object.fromEntries(
+        Object.entries(current.queue).filter(([id]) => live.has(id)),
       ),
     }
   })
@@ -675,6 +687,59 @@ export function setAttachments(sessionId: string, files: string[]): void {
     ...current,
     attachments: { ...current.attachments, [sessionId]: files },
   }))
+}
+
+function omitQueue(
+  queue: Record<string, QueuedPrompt[]>,
+  sessionId: string,
+): Record<string, QueuedPrompt[]> {
+  if (!(sessionId in queue)) return queue
+  const next = { ...queue }
+  delete next[sessionId]
+  return next
+}
+
+export function enqueuePrompt(sessionId: string, text: string, images: string[] = []): void {
+  const item: QueuedPrompt = { id: newId(), text, images }
+  setState((current) => ({
+    ...current,
+    queue: {
+      ...current.queue,
+      [sessionId]: [...(current.queue[sessionId] ?? []), item],
+    },
+  }))
+}
+
+export function removeQueued(sessionId: string, id: string): void {
+  setState((current) => {
+    const rest = (current.queue[sessionId] ?? []).filter((item) => item.id !== id)
+    if (rest.length === (current.queue[sessionId] ?? []).length) return current
+    const queue = { ...current.queue }
+    if (rest.length === 0) delete queue[sessionId]
+    else queue[sessionId] = rest
+    return { ...current, queue }
+  })
+}
+
+export function shiftQueue(sessionId: string): QueuedPrompt | null {
+  let taken: QueuedPrompt | null = null
+  setState((current) => {
+    const [next, ...rest] = current.queue[sessionId] ?? []
+    if (!next) return current
+    taken = next
+    const queue = { ...current.queue }
+    if (rest.length === 0) delete queue[sessionId]
+    else queue[sessionId] = rest
+    return { ...current, queue }
+  })
+  return taken
+}
+
+export function forgetQueue(sessionId: string): void {
+  setState((current) => {
+    if (!(sessionId in current.queue)) return current
+    return { ...current, queue: omitQueue(current.queue, sessionId) }
+  })
 }
 
 export function sessionModel(current: AppState, session: Session | null): Model | null {

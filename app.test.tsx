@@ -18,7 +18,7 @@ import { connectTest } from "@gpuix/react/automation"
 import { createTestRoot, hasNativeTestRenderer } from "@gpuix/react/testing"
 
 import { FxApp } from "./app"
-import { cleanTitle, fallbackTitle, reloadSkills, send } from "./src/agent/agent"
+import { cleanTitle, fallbackTitle, reloadSkills, cancel, send } from "./src/agent/agent"
 import { loadModels, refreshCredentials } from "./src/agent/credentials"
 import { COMPOSER_CARD_INSET } from "./src/views/composer"
 import { gitDiff, gitLog, gitStatus, isClean, summarise } from "./src/workspace/git"
@@ -88,16 +88,19 @@ import {
   clearNotices,
   createSession,
   createWorkspace,
+  enqueuePrompt,
   findSession,
   flushState,
   getState,
   nativeSearch,
   openSession,
+  removeQueued,
   removeWorkspace,
   resetState,
   setSettings,
   setSplit,
   setState,
+  shiftQueue,
   updateSession,
   type Message,
   type PermissionMode,
@@ -713,6 +716,36 @@ describe("git", () => {
 
     const log = await gitLog(root, { limit: 5 })
     expect(log).toContain("first commit")
+  })
+})
+
+describe("queued prompts", () => {
+  it("stores prompts in order and can drop one", () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    enqueuePrompt(session.id, "one")
+    enqueuePrompt(session.id, "two", ["/tmp/a.png"])
+
+    expect(getState().queue[session.id]?.map((item) => item.text)).toEqual(["one", "two"])
+    const second = getState().queue[session.id]![1]!
+    removeQueued(session.id, second.id)
+    expect(shiftQueue(session.id)?.text).toBe("one")
+    expect(shiftQueue(session.id)).toBeNull()
+    expect(getState().queue[session.id]).toBeUndefined()
+  })
+
+  it("queues a prompt when the session is already answering", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    setState((current) => ({ ...current, apiKey: "gateway-key" }))
+    updateSession(session.id, (current) => ({ ...current, status: "running" }))
+
+    await send(session.id, "do this next")
+
+    expect(getState().queue[session.id]?.map((item) => item.text)).toEqual(["do this next"])
+    expect(
+      messagesOf(session.id).some((message) => message.kind === "user" && message.text === "do this next"),
+    ).toBe(false)
   })
 })
 
@@ -3959,6 +3992,148 @@ describeNative("fx app", () => {
     const answer = messagesOf(first.id).find((message) => message.kind === "assistant")
     expect(answer?.kind === "assistant" && answer.text).toContain("done in the background.")
     expect(findSession(getState(), first.id)?.status).toBe("idle")
+    await app.close()
+  })
+
+  it("queues a follow-up and sends it once the turn finishes", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    setState((current) => ({ ...current, apiKey: "gateway-key" }))
+
+    let release = () => {}
+    const answered = new Promise<void>((resolve) => (release = resolve))
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String((input as Request)?.url ?? input)
+      if (!url.includes("/language-model")) return Response.json({ object: "list", data: [] })
+      await answered
+      return new Response(
+        `data: ${JSON.stringify({ type: "text-delta", delta: "done." })}\n\ndata: ${JSON.stringify({ type: "finish", finishReason: { unified: "stop" } })}\n\ndata: [DONE]\n\n`,
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      )
+    }) as unknown as typeof fetch
+
+    const until = async (done: () => boolean) => {
+      for (let tries = 0; tries < 200 && !done(); tries += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+    }
+    try {
+      const first = send(session.id, "first")
+      await until(() => findSession(getState(), session.id)?.status === "running")
+      await send(session.id, "second")
+      expect(getState().queue[session.id]?.map((item) => item.text)).toEqual(["second"])
+      release()
+      await first
+    } finally {
+      release()
+      globalThis.fetch = realFetch
+    }
+
+    const users = messagesOf(session.id).filter((message) => message.kind === "user")
+    expect(users.map((message) => message.text)).toEqual(["first", "second"])
+    expect(getState().queue[session.id]).toBeUndefined()
+    expect(findSession(getState(), session.id)?.status).toBe("idle")
+  })
+
+  it.each(["HTTP 401", "HTTP 400", "output limit"])(
+    "keeps queued prompts after a turn ends with %s",
+    async (outcome) => {
+      const workspace = createWorkspace(tempDir(), "demo")
+      const session = createSession(workspace.id)
+      setState((current) => ({ ...current, apiKey: "gateway-key" }))
+      updateSession(session.id, (current) => ({ ...current, title: "Queue failures" }))
+
+      let release = () => {}
+      const answered = new Promise<void>((resolve) => (release = resolve))
+      const realFetch = globalThis.fetch
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String((input as Request)?.url ?? input)
+        if (!url.includes("/language-model")) return Response.json({ object: "list", data: [] })
+        await answered
+        if (outcome.startsWith("HTTP")) {
+          return Response.json({ error: { message: "Request failed" } }, { status: Number(outcome.slice(5)) })
+        }
+        return new Response(
+          `data: ${JSON.stringify({ type: "finish", finishReason: { unified: "length" } })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        )
+      }) as unknown as typeof fetch
+
+      try {
+        const first = send(session.id, "first")
+        await send(session.id, "second", ["/tmp/queued-image.png"])
+        await send(session.id, "third")
+        release()
+        await first
+
+        expect(messagesOf(session.id).filter((message) => message.kind === "user").map((message) => message.text))
+          .toEqual(["first"])
+        expect(getState().queue[session.id]?.map(({ text, images }) => ({ text, images })))
+          .toEqual([{ text: "second", images: ["/tmp/queued-image.png"] }, { text: "third", images: [] }])
+      } finally {
+        release()
+        globalThis.fetch = realFetch
+      }
+    },
+  )
+
+  it("leaves the queue in place when the turn is stopped", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    setState((current) => ({ ...current, apiKey: "gateway-key" }))
+
+    let release = () => {}
+    const answered = new Promise<void>((resolve) => (release = resolve))
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String((input as Request)?.url ?? input)
+      if (!url.includes("/language-model")) return Response.json({ object: "list", data: [] })
+      await answered
+      return new Response(
+        `data: ${JSON.stringify({ type: "text-delta", delta: "done." })}\n\ndata: ${JSON.stringify({ type: "finish", finishReason: { unified: "stop" } })}\n\ndata: [DONE]\n\n`,
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      )
+    }) as unknown as typeof fetch
+
+    const until = async (done: () => boolean) => {
+      for (let tries = 0; tries < 200 && !done(); tries += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+    }
+    try {
+      const first = send(session.id, "first")
+      await until(() => findSession(getState(), session.id)?.status === "running")
+      await send(session.id, "second")
+      cancel(session.id)
+      release()
+      await first
+    } finally {
+      release()
+      globalThis.fetch = realFetch
+    }
+
+    expect(messagesOf(session.id).filter((message) => message.kind === "user").map((message) => message.text)).toEqual([
+      "first",
+    ])
+    expect(getState().queue[session.id]?.map((item) => item.text)).toEqual(["second"])
+  })
+
+  it("shows queued prompts and dismisses one", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    enqueuePrompt(session.id, "follow up after this")
+
+    const { renderer, app } = await mount()
+    await app.getByTestId("queue").waitFor()
+    expect(renderer.getPaintedText().join("\n")).toContain("follow up after this")
+
+    const id = getState().queue[session.id]![0]!.id
+    await app.getByTestId(`queue-dismiss-${id}`).click()
+    expect(getState().queue[session.id]).toBeUndefined()
     await app.close()
   })
 
