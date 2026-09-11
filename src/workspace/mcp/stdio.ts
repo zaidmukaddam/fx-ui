@@ -19,6 +19,7 @@ export class StdioWire implements Wire {
     config: LocalServer,
   ) {
     this.child = spawn(config.command, config.args ?? [], {
+      cwd: config.cwd,
       stdio: ["pipe", "pipe", "pipe"],
       env: config.env ? { ...process.env, ...config.env } : process.env,
     }) as ChildProcessWithoutNullStreams

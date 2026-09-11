@@ -151,6 +151,7 @@ declare module "libfx/mcp" {
 
   export interface McpOptions {
     prefix?: string
+    maxTools?: number
     resources?: string[]
     prompts?: Array<string | { name: string; arguments?: Record<string, string> }>
   }

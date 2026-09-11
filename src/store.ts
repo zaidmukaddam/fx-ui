@@ -84,6 +84,7 @@ export type Session = {
   fast: boolean
   mode: PermissionMode
   status: "idle" | "running" | "error"
+  compacting: boolean
   messages: Message[]
   context: Context
   grants: string[]
@@ -261,6 +262,7 @@ function load(): AppState {
   const sessions = (saved.sessions ?? []).map((session) => ({
     ...session,
     status: "idle" as const,
+    compacting: false,
     context: { ...EMPTY_CONTEXT, ...session.context },
     grants: session.grants ?? [],
     modelName: session.modelName ?? null,
@@ -301,6 +303,7 @@ function persistNow(): void {
     ...persisted(state),
     sessions: state.sessions.map((session) => ({
       ...session,
+      compacting: false,
       messages: session.messages.slice(-MAX_PERSISTED_MESSAGES),
     })),
     apiKey: process.env.AI_GATEWAY_API_KEY ? null : state.apiKey,
@@ -540,6 +543,7 @@ function newSession(current: AppState, workspaceId: string): Session {
     updatedAt: Date.now(),
     ...startsOn(current, workspaceId),
     status: "idle",
+    compacting: false,
     messages: [],
     context: { ...EMPTY_CONTEXT },
     grants: [],

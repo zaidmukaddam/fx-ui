@@ -180,6 +180,12 @@ export function Composer({
         paddingBottom: space.lg,
       }}
     >
+      {running && session.compacting ? (
+        <div testId="compaction-status" style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: space.sm, paddingBottom: space.sm }}>
+          <div style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color.tertiary }} />
+          <Label size={text.small} color={color.tertiary}>Compacting…</Label>
+        </div>
+      ) : null}
       {picker.open ? (
         <div style={{ height: 0, minWidth: 0 }}>
           <div style={{ position: "absolute", bottom: space.xs, left: 0, right: 0 }}>

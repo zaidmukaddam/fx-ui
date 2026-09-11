@@ -178,6 +178,15 @@ On a subscription the popover also shows the plan's usage, read off the
 headers of every reply. Codex sends the plan and each usage window with when it
 resets. Grok sends the requests and tokens left.
 
+During automatic compaction, “Compacting…” appears above the composer. The
+bundled libfx 0.0.8 engine does not publish compaction notices over ACP, so the
+app recognizes its dedicated summary system prompt in outgoing model requests.
+This works before Gateway, Grok, or Codex routing. The indicator stays visible
+through summary requests and clears when the next ordinary model request
+starts, or when the turn ends, fails, or is cancelled. It is never restored
+from saved state. The fx CLI makes its requests outside this bridge and does
+not currently expose a compaction signal, so CLI mode has no indicator.
+
 ### Skills
 
 fx's own skills live in `.fx/skills` in the workspace and in `~/.fx-ui/skills`,
@@ -198,6 +207,31 @@ or the command line that starts a local one. Removing it there takes it out of
 the running sessions as well. Either way it lands in `~/.fx-ui/mcp.json`, which
 stays hand-editable and keeps whatever else you have in it.
 
+Import in the MCP settings row finds global configs from Cursor
+(`~/.cursor/mcp.json`), Devin (`~/.config/devin/mcp_config.json`, or the older
+`config.json` when the dedicated file is absent), and Windsurf/Cascade
+(`~/.codeium/windsurf/mcp_config.json`). Devin also respects `XDG_CONFIG_HOME`.
+The list shows each source and lets you select servers to copy. Selecting the
+same name or connection from another source replaces the earlier selection.
+Existing fx entries are skipped, including entries added after the preview
+opened. Source files stay unchanged, and fx writes its config atomically with
+owner-only permissions. Imported servers start with fresh fx approvals and
+OAuth state; editor login sessions are not copied.
+
+Configs may contain comments and trailing commas. Import translates `serverUrl`
+to `url` and preserves disabled servers, which can be enabled from Settings.
+Environment and file references stay as references and are resolved when a
+server connects. Existing fx configs keep other `${…}` expressions unchanged
+so shells and inline scripts can evaluate them. Local servers support `envFile`
+and `cwd`; explicit `env` values override the environment file. Relative `cwd`
+and `envFile` paths are
+based on the source config directory. Relative commands and script paths need
+an explicit `cwd`, including scripts after runtime flags or `bun run` and
+`deno run`, so the importer does not guess a workspace. Workspace
+variables, legacy SSE, custom OAuth settings, and per-tool restrictions show
+an explanation and cannot be imported yet. Import and Enable/Disable wait for
+running turns to finish before reloading MCP connections.
+
 A remote server that answers `401` is not a failed load. It becomes a row in
 settings with a Sign in button, and the rest of the session carries on without
 it. Signing in runs the MCP authorization flow: the `WWW-Authenticate`
@@ -207,6 +241,15 @@ through your browser returns a token bound to that one server by `resource`.
 Tokens live in `~/.fx-ui/mcp-auth.json` at mode 600 and refresh themselves.
 Nothing opens a browser mid-turn. A server that needs you appears as a notice,
 and you sign in when you choose to.
+
+MCP catalogs load up to 1,024 tools per server, with pagination and duplicate
+name checks. A small `libfx@0.0.8` patch adds an explicit catalog limit option;
+the SDK's default stays at 64. This matters for servers such as Linear, whose
+catalog is larger than the SDK default. The agent still has at most 64 host
+tool slots: it discovers MCP tools with `capability_search`, reads a schema
+with `mcp_select_tool`, then passes the exact name and arguments to
+`mcp_call_tool`. Server tools stay in the shared MCP pool instead of occupying
+individual agent slots. Calls retain the same per-server approval scope.
 
 ### Images
 
@@ -292,7 +335,7 @@ The set fx documents at
 | Images | `vision` | none |
 | Skills | `skill`, `install_skill` | `install_skill` asks |
 | Subagents | `subagent` | inherits the parent's approvals |
-| MCP | `capability_search`, `mcp_features`, `mcp_select_tool`, plus every connected server tool | a server's own tools ask, and grants are per server |
+| MCP | `capability_search`, `mcp_features`, `mcp_select_tool`, `mcp_call_tool` | calls ask, and grants are per server |
 | Interaction | `ask_user_question`, `read_tool_result` | none |
 | Git | `git_status`, `git_diff`, `git_log` | none, they only read |
 

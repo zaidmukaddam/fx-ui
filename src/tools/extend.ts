@@ -1,10 +1,12 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
-import { listMcpServers, listMcpTools } from "../workspace/mcp"
+import { findMcpTool, listMcpServers, listMcpTools } from "../workspace/mcp"
 import { loadSkills } from "../workspace/skills"
 import {
+  adopt,
   defineTool,
+  field,
   gate,
   optionalString,
   requireString,
@@ -195,7 +197,7 @@ export function extensionTools(context: ToolContext): HostTool[] {
         parse: (input) => ({ name: requireString(input, "name") }),
         label: (input) => input.name,
         run: async (input) => {
-          const tool = listMcpTools().find((entry) => entry.name === input.name)
+          const tool = findMcpTool(input.name)?.tool
           if (!tool) {
             const known = listMcpTools().map((entry) => entry.name)
             throw new Error(
@@ -208,7 +210,7 @@ export function extensionTools(context: ToolContext): HostTool[] {
             text: [
               `${tool.name}: ${tool.description}`,
               "",
-              "It is already available; call it directly. Input schema:",
+              `Call mcp_call_tool with name "${tool.name}" and arguments matching this input schema:`,
               JSON.stringify(tool.inputSchema, null, 2),
             ].join("\n"),
             language: "json",
@@ -218,5 +220,36 @@ export function extensionTools(context: ToolContext): HostTool[] {
       },
       context,
     ),
+
+    adopt({
+      name: "mcp_call_tool",
+      description: "Run an MCP tool by its exact name from capability_search or mcp_features. Read its input schema with mcp_select_tool first, then pass the tool's input object as arguments.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The exact MCP tool name." },
+          arguments: { type: "object", additionalProperties: true, description: "The input object matching that tool's schema." },
+        },
+        required: ["name", "arguments"],
+      },
+      async execute(input, { signal }) {
+        const name = requireString(input, "name")
+        const args = field(input, "arguments")
+        if (!args || typeof args !== "object" || Array.isArray(args)) {
+          throw new Error("`arguments` is required and must be an object.")
+        }
+        const entry = findMcpTool(name)
+        if (!entry) throw new Error(`No MCP tool named ${name}. Use capability_search to find an available tool.`)
+        if (signal.aborted) throw new Error("cancelled")
+        await gate({ ...context, name }, {
+          title: `Run ${name}`,
+          detail: JSON.stringify(args),
+          scope: `mcp:${entry.server}`,
+          denied: `${name} was not run.`,
+        })
+        if (signal.aborted) throw new Error("cancelled")
+        return entry.tool.execute(args, { signal })
+      },
+    }, context),
   ]
 }

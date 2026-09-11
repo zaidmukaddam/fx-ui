@@ -6,6 +6,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  statSync,
   writeFileSync,
 } from "node:fs"
 import os from "node:os"
@@ -42,6 +43,8 @@ import {
   signOutOfServer,
   storedAuth,
 } from "./src/workspace/mcp"
+import { discoverMcpImports, importMcpServers } from "./src/workspace/mcp/import"
+import { resolveMcpConfig } from "./src/workspace/mcp/variables"
 import {
   activeCommand,
   activeMention,
@@ -1000,6 +1003,174 @@ describe("skills", () => {
   })
 })
 
+describe("mcp import", () => {
+  function source(home: string, relative: string, servers: Record<string, unknown>): string {
+    const file = path.join(home, relative)
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({ mcpServers: servers }))
+    return file
+  }
+
+  it("discovers JSONC configs, converts remote URLs, and identifies unsupported entries", () => {
+    const home = tempDir()
+    const target = path.join(home, "fx.json")
+    const cursor = source(home, ".cursor/mcp.json", {
+      remote: { url: "https://example.invalid/mcp", headers: { Authorization: "Bearer ${env:IMPORT_TOKEN}" } },
+      workspace: { command: "node", args: ["${workspaceFolder}/server.js"] },
+      oldTransport: { url: "https://example.invalid/sse", transport: "sse" },
+      oauth: { url: "https://example.invalid/mcp", auth: { CLIENT_ID: "client" } },
+      restricted: { command: "server", disabledTools: ["delete"] },
+      relative: { command: "node", args: ["./server.js"] },
+    })
+    writeFileSync(cursor, `// Cursor config\n${readFileSync(cursor, "utf8").replace(/}$/, ",}")}`)
+    source(home, ".codeium/windsurf/mcp_config.json", {
+      api: { serverUrl: "https://api.example.invalid/mcp", headers: { key: "${file:~/token}" }, disabled: true },
+    })
+    const found = discoverMcpImports(home, target)
+    expect(found.map((item) => item.id)).toEqual(["cursor", "windsurf"])
+    expect(found[0]!.entries[0]!.config).toEqual({ url: "https://example.invalid/mcp", headers: { Authorization: "Bearer ${env:IMPORT_TOKEN}" } })
+    expect(found[0]!.entries.slice(1).every((entry) => entry.problem && !entry.config)).toBe(true)
+    expect(found[1]!.entries[0]!.config).toEqual({ url: "https://api.example.invalid/mcp", headers: { key: `\${file:${home}/token}` }, disabled: true })
+    expect(existsSync(target)).toBe(false)
+  })
+
+  it("uses Devin's legacy config only when the dedicated MCP config is absent", () => {
+    const home = tempDir()
+    const target = path.join(home, "fx.json")
+    source(home, ".config/devin/config.json", { legacy: { command: "legacy" } })
+    expect(discoverMcpImports(home, target)[0]!.entries[0]!.name).toBe("legacy")
+    source(home, ".config/devin/mcp_config.json", { current: { command: "current" } })
+    const found = discoverMcpImports(home, target)
+    expect(found).toHaveLength(1)
+    expect(found[0]!.entries.map((entry) => entry.name)).toEqual(["current"])
+  })
+
+  it("requires cwd for relative script entrypoints after runtime flags and subcommands", () => {
+    const home = tempDir()
+    const target = path.join(home, "fx.json")
+    const relative = [
+      { command: "python3", args: ["-u", "server.py"] },
+      { command: "python3", args: ["-X", "dev", "server.py"] },
+      { command: "node", args: ["--no-warnings", "server.js"] },
+      { command: "node", args: ["--require", "/opt/preload.cjs", "server.js"] },
+      { command: "bun", args: ["run", "server.ts"] },
+      { command: "deno", args: ["run", "--allow-net", "server.ts"] },
+      { command: "ruby", args: ["-w", "server.rb"] },
+      { command: "node", args: ["--", "server"] },
+    ]
+    for (const config of relative) {
+      source(home, ".cursor/mcp.json", { relative: config, explicit: { ...config, cwd: home } })
+      const entries = discoverMcpImports(home, target)[0]!.entries
+      expect(entries[0]!.problem ?? "", JSON.stringify(config)).toMatch(/working directory \(cwd\)/)
+      expect(entries[0]!.config).toBeNull()
+      expect(entries[1]!.problem).toBeNull()
+    }
+    const portable = [
+      { command: "node", args: ["--require", "/opt/preload.cjs", "/opt/server.js", "input.js"] },
+      { command: "python3", args: ["-X", "dev", "/opt/server.py", "input.py"] },
+      { command: "python3", args: ["-c", "print('server.py')", "input.py"] },
+      { command: "python3", args: ["-m", "installed_server", "input.py"] },
+      { command: "node", args: ["-e", "console.log('server.js')", "input.js"] },
+      { command: "bun", args: ["run", "/opt/server.ts", "input.ts"] },
+      { command: "deno", args: ["run", "--allow-net", "https://example.invalid/server.ts"] },
+    ]
+    for (const config of portable) {
+      source(home, ".cursor/mcp.json", { portable: config })
+      expect(discoverMcpImports(home, target)[0]!.entries[0]!.problem, JSON.stringify(config)).toBeNull()
+    }
+  })
+
+  it("imports selected servers without changing sources, existing fields, or duplicates", () => {
+    const home = tempDir()
+    const target = path.join(home, "fx.json")
+    writeFileSync(target, JSON.stringify({ note: "keep", mcpServers: {
+      existing: { url: "https://existing.invalid/mcp", futureOption: "keep" },
+      unknown: { futureTransport: "keep" },
+    } }))
+    const cursor = source(home, ".cursor/mcp.json", {
+      existing: { command: "different" },
+      alias: { url: "https://existing.invalid/mcp" },
+      selected: { command: "chosen", env: { TOKEN: "fixture-secret" }, disabled: true },
+      ignored: { command: "unselected" },
+    })
+    const original = readFileSync(cursor, "utf8")
+    const entries = discoverMcpImports(home, target)[0]!.entries
+    expect(entries.slice(0, 2).every((entry) => entry.problem === "Already configured in fx.")).toBe(true)
+    expect(importMcpServers([entries[2]!], target)).toEqual({ imported: ["selected"], skipped: [] })
+    expect(importMcpServers([entries[2]!], target)).toEqual({ imported: [], skipped: ["selected"] })
+    const saved = JSON.parse(readFileSync(target, "utf8"))
+    expect(saved.note).toBe("keep")
+    expect(saved.mcpServers.existing.futureOption).toBe("keep")
+    expect(saved.mcpServers.unknown).toEqual({ futureTransport: "keep" })
+    expect(saved.mcpServers.selected.disabled).toBe(true)
+    expect(saved.mcpServers.ignored).toBeUndefined()
+    expect(statSync(target).mode & 0o777).toBe(0o600)
+    expect(readFileSync(cursor, "utf8")).toBe(original)
+  })
+
+  it("rechecks duplicates and refuses to overwrite a config damaged after preview", () => {
+    const home = tempDir()
+    const target = path.join(home, "fx.json")
+    source(home, ".cursor/mcp.json", { chosen: { command: "chosen" } })
+    const entries = discoverMcpImports(home, target)[0]!.entries
+    writeFileSync(target, JSON.stringify({ mcpServers: { chosen: { command: "added-later" } } }))
+    expect(importMcpServers(entries, target).skipped).toEqual(["chosen"])
+    expect(readMcpConfig(target).chosen).toMatchObject({ command: "added-later" })
+    writeFileSync(target, "{ broken")
+    expect(() => importMcpServers(entries, target)).toThrow(/invalid JSON/)
+    expect(readFileSync(target, "utf8")).toBe("{ broken")
+  })
+
+  it("preserves variable references and reads their current values only when connecting", () => {
+    const home = tempDir()
+    writeFileSync(path.join(home, "token"), "first-token\n")
+    const config = { url: "${env:MCP_URL}", headers: { token: "${file:~/token}", key: "${env:KEY}" } }
+    const env = { MCP_URL: "https://example.invalid/mcp", KEY: "first-key" }
+    expect(resolveMcpConfig(config, env, home)).toMatchObject({ headers: { token: "first-token", key: "first-key" } })
+    writeFileSync(path.join(home, "token"), "second-token\n")
+    expect(resolveMcpConfig(config, { ...env, KEY: "second-key" }, home)).toMatchObject({ headers: { token: "second-token", key: "second-key" } })
+    expect(config.headers.key).toBe("${env:KEY}")
+    expect(() => resolveMcpConfig(config, { MCP_URL: env.MCP_URL }, home)).toThrow(/KEY environment variable/)
+  })
+
+  it("runs imported stdio servers with their cwd and env file while leaving disabled servers stopped", async () => {
+    const home = tempDir()
+    const target = path.join(home, "fx.json")
+    const marker = path.join(home, "started.json")
+    const forbidden = path.join(home, "must-not-start")
+    writeFileSync(path.join(home, "vars.env"), "TOKEN=from-file\n")
+    writeFileSync(path.join(home, "server.mjs"), `import { writeFileSync } from "node:fs"
+writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ cwd: process.cwd(), token: process.env.IMPORT_TOKEN }))
+let buffer = ""
+process.stdin.on("data", chunk => {
+  buffer += chunk
+  let end
+  while ((end = buffer.indexOf("\\n")) >= 0) {
+    const message = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1)
+    if (message.id === undefined) continue
+    const result = message.method === "initialize"
+      ? { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } }
+      : { tools: [] }
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\\n")
+  }
+})`)
+    source(home, ".cursor/mcp.json", {
+      active: { command: process.execPath, args: ["./server.mjs"], cwd: home, envFile: "../vars.env", env: { IMPORT_TOKEN: "${env:TOKEN}" } },
+      stopped: { command: process.execPath, args: ["-e", `require('fs').writeFileSync(${JSON.stringify(forbidden)}, '')`], disabled: true },
+    })
+    importMcpServers(discoverMcpImports(home, target)[0]!.entries, target)
+    const loaded = await loadMcp(target)
+    try {
+      expect(loaded.problems).toEqual([])
+      expect(loaded.names).toEqual(["active"])
+      expect(JSON.parse(readFileSync(marker, "utf8"))).toEqual({ cwd: home, token: "from-file" })
+      expect(existsSync(forbidden)).toBe(false)
+    } finally {
+      await loaded.close()
+    }
+  })
+})
+
 describe("mcp", () => {
   it("reads the server map and drops entries with no command", () => {
     const file = path.join(tempDir(), "mcp.json")
@@ -1025,7 +1196,7 @@ describe("mcp", () => {
     expect(readMcpConfig(bad)).toEqual({})
   })
 
-  it("connects to a server over stdio and adapts its tools", async () => {
+  it.each(["direct", "shell", "inline"])("connects to a server over stdio using a %s command and adapts its tools", async (mode) => {
     const root = tempDir()
     const server = path.join(root, "server.mjs")
     writeFileSync(
@@ -1057,7 +1228,11 @@ function reply(id, result) {
     const file = path.join(root, "mcp.json")
     writeFileSync(
       file,
-      JSON.stringify({ mcpServers: { demo: { command: process.execPath, args: [server] } } }),
+      JSON.stringify({ mcpServers: { demo: mode === "shell"
+        ? { command: "/bin/sh", args: ["-c", 'exec "${MCP_RUNTIME}" "${MCP_SCRIPT}"'], env: { MCP_RUNTIME: process.execPath, MCP_SCRIPT: server } }
+        : mode === "inline"
+          ? { command: process.execPath, args: ["-e", 'import(`${process.env.MCP_SCRIPT}`)'], env: { MCP_SCRIPT: server } }
+          : { command: process.execPath, args: [server] } } }),
     )
 
     const loaded = await loadMcp(file)
@@ -1203,6 +1378,133 @@ function reply(id, result) {
     } finally {
       await loaded.close()
       server.close()
+    }
+  })
+
+  it.each([false, true])("loads and calls all 70 MCP tools with pagination=%s", async (paginated) => {
+    await resetMcp()
+    const calls: unknown[] = []
+    const catalog = Array.from({ length: 70 }, (_, index) => ({
+      name: `tool_${index}`,
+      description: `Tool number ${index}.`,
+      inputSchema: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+    }))
+    const server = createServer((request, response) => {
+      let body = ""
+      request.on("data", (chunk: Buffer) => { body += chunk.toString() })
+      request.on("end", () => {
+        if (request.method === "DELETE") { response.writeHead(204).end(); return }
+        const message = JSON.parse(body || "{}")
+        if (message.id === undefined) { response.writeHead(202).end(); return }
+        let result: unknown
+        if (message.method === "initialize") {
+          result = { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "large", version: "1" } }
+        } else if (message.method === "tools/list") {
+          result = paginated
+            ? message.params.cursor ? { tools: catalog.slice(35) } : { tools: catalog.slice(0, 35), nextCursor: "second" }
+            : { tools: catalog }
+        } else {
+          calls.push(message.params)
+          result = { content: [{ type: "text", text: `called ${message.params.name}` }] }
+        }
+        response.writeHead(200, { "content-type": "text/event-stream" })
+        response.end(`data: ${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n\n`)
+      })
+    })
+    await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready))
+    const file = path.join(tempDir(), "mcp.json")
+    writeFileSync(file, JSON.stringify({ mcpServers: { linear: { url: `http://127.0.0.1:${(server.address() as { port: number }).port}/mcp` } } }))
+    const loaded = await acquireMcp(file)
+    try {
+      expect(loaded.problems).toEqual([])
+      expect(loaded.tools).toHaveLength(70)
+      const { session, tools } = seed("ask")
+      const last = loaded.tools.at(-1)!.tool.name
+      expect(await run(tools.capability_search!, { query: "tool_69" })).toContain(last)
+      expect(await run(tools.mcp_select_tool!, { name: last })).toContain("mcp_call_tool")
+      const denied = run(tools.mcp_call_tool!, { name: last, arguments: { value: "denied" } })
+      const rejection = expect(denied).rejects.toThrow(/Denied by the user/)
+      const prompt = await waitForApproval(session.id)
+      expect(prompt.scope).toBe("mcp:linear")
+      resolveApproval(session.id, prompt.approvalId, "denied")
+      await rejection
+      expect(calls).toEqual([])
+      const pending = run(tools.mcp_call_tool!, { name: last, arguments: { value: "hello" } })
+      const approval = await waitForApproval(session.id)
+      resolveApproval(session.id, approval.approvalId, "allowed")
+      expect(await pending).toContain("called tool_69")
+      expect(calls).toEqual([{ name: "tool_69", arguments: { value: "hello" } }])
+
+      setState((current) => ({ ...current, apiKey: "gateway-key", useCli: false }))
+      updateSession(session.id, (current) => ({ ...current, mode: "full-access" }))
+      const requests: Record<string, unknown>[] = []
+      const realFetch = globalThis.fetch
+      const frames = (events: unknown[]) => new Response(
+        `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      )
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String((input as Request)?.url ?? input)
+        if (url.startsWith("http://127.0.0.1:")) return realFetch(input, init)
+        if (!url.includes("/language-model")) return Response.json({ data: [] })
+        const raw = typeof init?.body === "string" ? init.body : Buffer.from((init?.body ?? "") as never).toString("utf8")
+        if (raw.includes("You name conversations")) return new Response("{}", { status: 400 })
+        requests.push(JSON.parse(raw))
+        if (requests.length === 1) return frames([
+          { type: "tool-input-start", id: "linear-call", toolName: "mcp_call_tool" },
+          { type: "tool-input-delta", id: "linear-call", delta: JSON.stringify({ name: last, arguments: { value: "from agent" } }) },
+          { type: "tool-input-end", id: "linear-call" },
+          { type: "tool-call", toolCallId: "linear-call", toolName: "mcp_call_tool", input: { name: last, arguments: { value: "from agent" } } },
+          { type: "finish", finishReason: { unified: "tool-calls" } },
+        ])
+        return frames([
+          { type: "text-delta", delta: "Linear tool completed." },
+          { type: "finish", finishReason: { unified: "stop" } },
+        ])
+      }) as typeof fetch
+      try {
+        await send(session.id, "Call the last Linear tool")
+        expect(requests).toHaveLength(2)
+        expect(JSON.stringify(requests[0])).toContain("mcp_call_tool")
+        expect(calls.at(-1)).toEqual({ name: "tool_69", arguments: { value: "from agent" } })
+        expect(messagesOf(session.id).some((message) => message.kind === "assistant" && message.text.includes("Linear tool completed."))).toBe(true)
+        expect(messagesOf(session.id).filter((message) => message.kind === "notice" && message.tone === "error")).toEqual([])
+      } finally {
+        await reloadSkills()
+        globalThis.fetch = realFetch
+      }
+    } finally {
+      await loaded.release()
+      await resetMcp()
+      server.close()
+    }
+  })
+
+  it("refuses ambiguous MCP names instead of calling the wrong server", async () => {
+    await resetMcp()
+    const file = path.join(tempDir(), "mcp.json")
+    writeFileSync(file, JSON.stringify({ mcpServers: { a: { url: "https://mcp.example/a" }, ab: { url: "https://mcp.example/ab" } } }))
+    const realFetch = globalThis.fetch
+    const calls: unknown[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const message = JSON.parse(String(init?.body ?? "{}"))
+      if (message.method === "tools/call") calls.push(message.params)
+      const result = message.method === "tools/list"
+        ? { tools: [{ name: String(input).endsWith("/ab") ? "c" : "bc", inputSchema: { type: "object", properties: {} } }] }
+        : {}
+      return Response.json({ jsonrpc: "2.0", id: message.id, result })
+    }) as typeof fetch
+    try {
+      const loaded = await acquireMcp(file)
+      expect(loaded.problems).toEqual([])
+      const { tools } = seed("full-access")
+      await expect(run(tools.mcp_select_tool!, { name: "abc" })).rejects.toThrow(/shared by multiple servers/)
+      await expect(run(tools.mcp_call_tool!, { name: "abc", arguments: {} })).rejects.toThrow(/shared by multiple servers/)
+      expect(calls).toEqual([])
+      await loaded.release()
+    } finally {
+      await resetMcp()
+      globalThis.fetch = realFetch
     }
   })
 
@@ -2036,6 +2338,129 @@ describeNative("fx app", () => {
     }
   })
 
+  it.each([700, 1024])("imports selected MCP servers from settings at %ipx without showing secrets", async (width) => {
+    const { session } = seed()
+    const cursor = path.join(DIR, ".cursor", "mcp.json")
+    const devin = path.join(DIR, ".config", "devin", "mcp_config.json")
+    const config = path.join(DIR, "mcp.json")
+    mkdirSync(path.dirname(cursor), { recursive: true })
+    mkdirSync(path.dirname(devin), { recursive: true })
+    writeFileSync(config, JSON.stringify({ mcpServers: {} }))
+    writeFileSync(cursor, JSON.stringify({ mcpServers: {
+      remote: { url: "http://127.0.0.1:1/mcp", headers: { Authorization: "fixture-secret-do-not-show" } },
+      paused: { command: "must-not-be-started", disabled: true },
+    } }))
+    writeFileSync(devin, JSON.stringify({ mcpServers: { remote: { url: "http://127.0.0.1:2/mcp" } } }))
+    updateSession(session.id, (current) => ({ ...current, grants: ["mcp:remote", "write"] }))
+    setSettings(true)
+    const { renderer, app } = await mount(width, 800)
+    try {
+      await app.getByTestId("mcp-import").waitFor()
+      await settle()
+      renderer.flush()
+      const scroll = await app.getByTestId("settings-scroll").bounds()
+      const bottom = () => {
+        renderer.nativeSimulateScrollWheel(scroll.x + scroll.width / 2, scroll.y + 100, 0, -4_000)
+        renderer.flush()
+      }
+      bottom()
+      await app.getByTestId("mcp-import").click()
+      await app.getByTestId("mcp-import-select-cursor:remote").waitFor()
+      bottom()
+      expect(renderer.getPaintedText().join("\n")).not.toContain("fixture-secret-do-not-show")
+      await app.getByTestId("mcp-import-select-cursor:remote").click()
+      await app.getByTestId("mcp-import-select-devin:remote").click()
+      expect(await app.getByTestId("mcp-import-select-cursor:remote").textContent()).toBe("Select")
+      expect(await app.getByTestId("mcp-import-select-devin:remote").textContent()).toContain("Selected")
+      await app.getByTestId("mcp-import-select-cursor:paused").click()
+      await app.getByTestId("mcp-import-confirm").click()
+      await vi.waitFor(() => expect(readMcpConfig(config)).toMatchObject({
+        remote: { url: "http://127.0.0.1:2/mcp" },
+        paused: { command: "must-not-be-started", disabled: true },
+      }))
+      expect(findSession(getState(), session.id)!.grants).toEqual(["write"])
+      await vi.waitFor(async () => expect(await app.getByTestId("mcp-import-panel").textContent()).toContain("Imported 2 servers."))
+      expect(readFileSync(cursor, "utf8")).toContain("fixture-secret-do-not-show")
+    } finally {
+      await app.close()
+      await resetMcp()
+      rmSync(cursor, { force: true })
+      rmSync(devin, { force: true })
+      writeFileSync(config, JSON.stringify({ mcpServers: {} }))
+    }
+  })
+
+  it.each([true, false])("keeps active MCP calls alive when toggling a server with disabled=%s", async (disabled) => {
+    const { root, session } = seed()
+    const file = path.join(DIR, "mcp.json")
+    const server = path.join(root, "server.mjs")
+    const started = path.join(root, "started")
+    const release = path.join(root, "release")
+    writeFileSync(server, `import { existsSync, writeFileSync } from "node:fs"
+let buffer = ""
+process.stdin.on("data", chunk => {
+  buffer += chunk
+  let end
+  while ((end = buffer.indexOf("\\n")) >= 0) {
+    const message = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1)
+    if (message.id === undefined) continue
+    const reply = result => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\\n")
+    if (message.method === "initialize") {
+      reply({ protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } })
+    } else if (message.method === "tools/list") {
+      reply({ tools: [{ name: "wait", inputSchema: { type: "object", properties: {} } }] })
+    } else if (message.method === "tools/call") {
+      writeFileSync(${JSON.stringify(started)}, "")
+      const timer = setInterval(() => {
+        if (!existsSync(${JSON.stringify(release)})) return
+        clearInterval(timer)
+        reply({ content: [{ type: "text", text: "finished" }] })
+      }, 10)
+    }
+  }
+})`)
+    writeFileSync(file, JSON.stringify({ mcpServers: {
+      active: { command: process.execPath, args: [server] },
+      paused: { command: process.execPath, args: [server], disabled },
+    } }))
+    await resetMcp()
+    const lease = await acquireMcp()
+    expect(lease.problems).toEqual([])
+    const tool = lease.tools.find((entry) => entry.server === "active")!.tool
+    const controller = new AbortController()
+    const pending = Promise.resolve(tool.execute({}, { signal: controller.signal }))
+    void pending.catch(() => {})
+    updateSession(session.id, (current) => ({ ...current, status: "running" }))
+    setSettings(true)
+    const { renderer, app } = await mount(1100, 900)
+    try {
+      await vi.waitFor(() => expect(existsSync(started)).toBe(true))
+      await app.getByTestId("mcp-toggle-paused").waitFor()
+      const scroll = await app.getByTestId("settings-scroll").bounds()
+      renderer.nativeSimulateScrollWheel(scroll.x + scroll.width / 2, scroll.y + 100, 0, -4_000)
+      renderer.flush()
+      await app.getByTestId("mcp-toggle-paused").click()
+      await settle()
+      expect(!!readMcpConfig(file).paused!.disabled).toBe(disabled)
+      writeFileSync(release, "")
+      expect(JSON.stringify(await pending)).toContain("finished")
+
+      updateSession(session.id, (current) => ({ ...current, status: "idle" }))
+      await settle()
+      renderer.flush()
+      await app.getByTestId("mcp-toggle-paused").click()
+      await vi.waitFor(() => expect(!!readMcpConfig(file).paused!.disabled).toBe(!disabled))
+      await vi.waitFor(async () => expect(await app.getByTestId("mcp-toggle-paused").textContent()).toBe(disabled ? "Disable" : "Enable"))
+    } finally {
+      controller.abort()
+      await pending.catch(() => {})
+      await app.close()
+      await lease.release()
+      await resetMcp()
+      writeFileSync(file, JSON.stringify({ mcpServers: {} }))
+    }
+  })
+
   it("adds and removes an MCP server from settings", async () => {
     const workspace = createWorkspace(tempDir(), "demo")
     openSession(createSession(workspace.id).id, 0)
@@ -2497,6 +2922,100 @@ describeNative("fx app", () => {
         : Buffer.from((init?.body ?? "") as never).toString("utf8")
     return body.includes("You name conversations")
   }
+
+  it.each([
+    { outcome: "completed", width: 700 },
+    { outcome: "failed", width: 1180 },
+    { outcome: "cancelled", width: 700 },
+  ])("shows live compaction and clears it when $outcome", async ({ outcome, width }) => {
+    const { session } = seed()
+    const model = "fixture/compaction"
+    setState((current) => ({ ...current, apiKey: "fixture-key", models: [{ id: model, name: "Fixture", contextWindow: 65_536 }] }))
+    updateSession(session.id, (current) => ({ ...current, model, modelName: "Fixture", provider: null }))
+    let summarizing = false
+    let resumed = false
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    let finish!: () => void
+    const continued = new Promise<void>((resolve) => { finish = resolve })
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String((input as Request)?.url ?? input)
+      if (!url.includes("/language-model")) {
+        return Response.json({ object: "list", data: [{ id: model, type: "language", context_window: 65_536, max_tokens: 4096, tags: ["tool-use"] }] })
+      }
+      if (isNaming(init)) return new Response("{}", { status: 400 })
+      const body = Buffer.from(init?.body as never).toString("utf8")
+      const summary = body.includes("You are writing a summary for a separate assistant")
+      if (summary) {
+        summarizing = true
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => reject(new DOMException("Aborted", "AbortError"))
+          if (init?.signal?.aborted) return abort()
+          init?.signal?.addEventListener("abort", abort, { once: true })
+          void held.then(() => {
+            init?.signal?.removeEventListener("abort", abort)
+            resolve()
+          })
+        })
+        if (outcome === "failed") return new Response("Compaction fixture failed", { status: 500 })
+      } else if (summarizing) {
+        resumed = body.includes("<context_handoff>")
+        await continued
+      }
+      const events = [
+        { type: "text-delta", delta: summary ? "The user asked to retain the fixture details and continue." : "Fixture reply." },
+        { type: "finish", finishReason: { unified: "stop" }, usage: { inputTokens: { total: Math.ceil(body.length / 4) }, outputTokens: { total: 20 } } },
+      ]
+      return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
+    }) as typeof fetch
+    const { renderer, app } = await mount(width, 800)
+    const work = (async () => {
+      for (let i = 0; i < 8 && !summarizing; i++) {
+        await send(session.id, `Fixture turn ${i}. ` + "The recorded fixture detail is stable. ".repeat(1500))
+      }
+    })()
+    try {
+      await vi.waitFor(() => expect(summarizing).toBe(true), { timeout: 5_000 })
+      await settle()
+      renderer.flush()
+      expect(renderer.findByTestId("compaction-status")).toBeDefined()
+      expect(await app.getByTestId("compaction-status").textContent()).toBe("Compacting…")
+      const status = await app.getByTestId("compaction-status").bounds()
+      const composer = await app.getByTestId("composer-column").bounds()
+      expect(status.x).toBeGreaterThanOrEqual(0)
+      expect(status.x + status.width).toBeLessThanOrEqual(width)
+      expect(status.y + status.height).toBeLessThanOrEqual(composer.y)
+      expect(findSession(getState(), session.id)!.status).toBe("running")
+      flushState()
+      const saved = JSON.parse(readFileSync(path.join(DIR, "state.json"), "utf8")) as { sessions: Session[] }
+      expect(saved.sessions.find((entry) => entry.id === session.id)!.compacting).toBe(false)
+      if (outcome === "cancelled") await app.getByTestId("stop").click()
+      else release()
+      if (outcome === "completed") {
+        await vi.waitFor(() => expect(resumed).toBe(true))
+        await settle()
+        renderer.flush()
+        expect(renderer.findByTestId("compaction-status")).toBeUndefined()
+        expect(findSession(getState(), session.id)!.status).toBe("running")
+        finish()
+      }
+      await work
+      await settle()
+      renderer.flush()
+      expect(renderer.findByTestId("compaction-status")).toBeUndefined()
+      expect(findSession(getState(), session.id)!.status).not.toBe("running")
+      expect(messagesOf(session.id).some((message) => message.kind === "assistant" && message.text.includes("Compacting"))).toBe(false)
+      if (outcome === "completed") expect(resumed).toBe(true)
+    } finally {
+      cancel(session.id)
+      release()
+      finish()
+      await work
+      await app.close()
+      globalThis.fetch = realFetch
+    }
+  })
 
   it("starts a new assistant message after a row lands under the last one", async () => {
     const root = tempDir()

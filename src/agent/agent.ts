@@ -224,8 +224,15 @@ async function runtimeFor(sessionId: string): Promise<Runtime> {
   const workspace = findWorkspace(state, session.workspaceId)
   if (!workspace) throw new Error("That workspace no longer exists.")
 
-  const back = backing(session, searchRows(sessionId), (used) =>
-    updateSession(sessionId, (current) => ({ ...current, context: { ...current.context, used } })),
+  const back = backing(
+    session,
+    searchRows(sessionId),
+    (used) => updateSession(sessionId, (current) => ({ ...current, context: { ...current.context, used } })),
+    (compacting) => {
+      const current = findSession(getState(), sessionId)
+      if (!current || current.status !== "running" || current.compacting === compacting) return
+      updateSession(sessionId, (current) => ({ ...current, compacting }))
+    },
   )
   if (!back) {
     throw new MissingApiKeyError(NO_CREDENTIAL)
@@ -265,7 +272,7 @@ async function runtimeFor(sessionId: string): Promise<Runtime> {
       system: estimateTokens(system),
       tools: estimateTokens(hostTools),
       skills: estimateTokens(skills.instructions, skills.tools),
-      mcp: estimateTokens(mcp.instructions, mcp.tools.map(({ tool }) => tool)),
+      mcp: estimateTokens(mcp.instructions),
     },
   }))
   const agent = (await createFxAgent({
@@ -274,12 +281,6 @@ async function runtimeFor(sessionId: string): Promise<Runtime> {
     tools: [
       ...hostTools,
       ...skills.tools.map((tool) => adopt(tool, toolContext)),
-      ...mcp.tools.map(({ server, tool }) =>
-        adopt(tool, toolContext, {
-          title: `Run ${tool.name}`,
-          scope: `mcp:${server}`,
-        }),
-      ),
     ],
     checkpoint: readCheckpoint(sessionId),
   })) as Agent
@@ -465,6 +466,7 @@ export async function send(
   updateSession(sessionId, (session) => ({
     ...session,
     status: "running",
+    compacting: false,
     title: isFirstTurn ? fallbackTitle(trimmed) : session.title,
   }))
 
@@ -534,6 +536,7 @@ export async function send(
     notice(sessionId, "error", message, error instanceof MissingApiKeyError ? "settings" : undefined)
     updateSession(sessionId, (session) => ({ ...session, status: "error" }))
   } finally {
+    updateSession(sessionId, (session) => ({ ...session, compacting: false }))
     denyPendingApprovals(sessionId)
     dismissPendingQuestions(sessionId)
     const workspaceId = findSession(getState(), sessionId)?.workspaceId

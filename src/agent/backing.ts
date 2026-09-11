@@ -25,6 +25,7 @@ export function backing(
   session: Session | null,
   onSearch?: (step: SearchStep) => void,
   onUsage?: (tokens: number) => void,
+  onCompaction?: (active: boolean) => void,
 ): Backing | null {
   const state = getState()
   if (!session || !canAnswer(state, session)) return null
@@ -45,6 +46,7 @@ export function backing(
         search,
         onSearch,
         onUsage,
+        onCompaction,
         onLimits: provider ? (limits) => setLimits(provider, limits) : undefined,
       }),
       ...(model ? { model } : {}),

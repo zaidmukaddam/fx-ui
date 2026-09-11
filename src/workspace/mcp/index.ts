@@ -6,6 +6,7 @@ import { MCP_CONFIG_FILE, isRemote, readMcpConfig, type ServerConfig } from "./c
 import { HttpWire, NeedsSignIn } from "./http"
 import { McpSession } from "./session"
 import { StdioWire } from "./stdio"
+import { resolveMcpConfig } from "./variables"
 
 export {
   MCP_CONFIG_FILE,
@@ -13,6 +14,7 @@ export {
   isRemote,
   readMcpConfig,
   removeMcpServer,
+  setMcpDisabled,
   serverFrom,
   type LocalServer,
   type RemoteServer,
@@ -51,7 +53,7 @@ function clientFor(name: string, config: ServerConfig): McpSession {
 
 export async function loadMcp(file = MCP_CONFIG_FILE): Promise<LoadedMcp> {
   const config = readMcpConfig(file)
-  const names = Object.keys(config)
+  const names = Object.keys(config).filter((name) => !config[name]!.disabled)
   if (names.length === 0) return EMPTY
 
   const tools: ServerTool[] = []
@@ -64,10 +66,11 @@ export async function loadMcp(file = MCP_CONFIG_FILE): Promise<LoadedMcp> {
     names.map(async (name) => {
       let client: McpSession | null = null
       try {
-        client = clientFor(name, config[name]!)
+        client = clientFor(name, resolveMcpConfig(config[name]!))
         await client.initialize()
         const adapter = await createMcpAdapter(client, {
           prefix: name.replace(/[^A-Za-z0-9_-]/g, "_"),
+          maxTools: 1024,
         })
         for (const tool of adapter.tools as HostTool[]) tools.push({ server: name, tool })
         if (adapter.instructions) instructions.push(adapter.instructions)
@@ -91,7 +94,10 @@ export async function loadMcp(file = MCP_CONFIG_FILE): Promise<LoadedMcp> {
 
   return {
     tools,
-    instructions: instructions.join("\n\n"),
+    instructions: [
+      connected.length ? `Connected MCP servers: ${connected.join(", ")}. Find their tools with capability_search, inspect inputs with mcp_select_tool, and run them with mcp_call_tool.` : "",
+      ...instructions,
+    ].filter(Boolean).join("\n\n"),
     names: connected,
     problems,
     close: async () => {
@@ -144,10 +150,19 @@ export function listMcpTools(): HostTool[] {
   return (pool?.live?.tools ?? []).map((entry) => entry.tool)
 }
 
+export function findMcpTool(name: string): ServerTool | undefined {
+  const matches = pool?.live?.tools.filter((entry) => entry.tool.name === name) ?? []
+  if (matches.length > 1) {
+    throw new Error(`MCP tool name ${name} is shared by multiple servers. Rename a server in Settings before calling it.`)
+  }
+  return matches[0]
+}
+
 export function listMcpServers(file = MCP_CONFIG_FILE): {
   name: string
   url: string | null
   signedIn: boolean
+  disabled: boolean
   tools: number
   toolNames: string[]
 }[] {
@@ -162,6 +177,7 @@ export function listMcpServers(file = MCP_CONFIG_FILE): {
       name,
       url: isRemote(entry) ? entry.url : null,
       signedIn: authorised.has(name),
+      disabled: !!entry.disabled,
       tools: toolNames.length,
       toolNames,
     }

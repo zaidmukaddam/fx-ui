@@ -287,7 +287,7 @@ export function Transcript({
           top: 0,
           left: 0,
           right: 0,
-          height: SCROLL_FADE_HEIGHT,
+          height: SCROLL_FADE_HEIGHT / 2,
           pointerEvents: "none",
           background: {
             type: "linear-gradient",

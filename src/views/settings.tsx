@@ -10,6 +10,7 @@ import {
   beginServerSignIn,
   listMcpServers,
   removeMcpServer,
+  setMcpDisabled,
   signOutOfServer,
 } from "../workspace/mcp"
 import {
@@ -27,6 +28,7 @@ import {
   apiKeySource,
   findSession,
   findWorkspace,
+  getState,
   setSettings,
   setState,
   type Account,
@@ -34,6 +36,8 @@ import {
   type UpdateStatus,
 } from "../store"
 import { ModelChoice, keyOf } from "./models"
+import { McpImport } from "./mcp-import"
+import { expandMcpValue } from "../workspace/mcp/variables"
 import {
   color,
   columnFor,
@@ -310,9 +314,11 @@ function AddMcpServerRow({ onChanged }: { onChanged: () => void }) {
 
 function McpServerRow({
   server,
+  running,
   onChanged,
 }: {
   server: Server
+  running: boolean
   onChanged: () => void
 }) {
   const [busy, setBusy] = useState(false)
@@ -322,7 +328,7 @@ function McpServerRow({
     setError(null)
     setBusy(true)
     try {
-      const flow = await beginServerSignIn(server.name, server.url!, null, openExternally)
+      const flow = await beginServerSignIn(server.name, expandMcpValue(server.url!), null, openExternally)
       await flow.completed
       await reloadSkills()
       onChanged()
@@ -333,19 +339,25 @@ function McpServerRow({
     }
   }
 
+  let host = "Remote"
+  try {
+    if (server.url) host = new URL(server.url).host
+  } catch {}
   const detail = error
     ? error
     : busy
       ? "Waiting for the browser to finish the sign-in."
+      : server.disabled
+        ? "Disabled. This server will not connect until enabled."
       : server.url
         ? server.signedIn
-          ? `${new URL(server.url).host} · signed in · ${server.tools} tools`
-          : `${new URL(server.url).host} · not signed in. Its tools stay out of the session until you are.`
+          ? `${host} · signed in · ${server.tools} tools`
+          : `${host} · ${server.tools} tools. Sign in if this server requires OAuth.`
         : `Local · ${server.tools} tools`
 
   return (
     <Row title={server.name} detail={detail}>
-      {server.url ? (
+      {server.url && !server.disabled ? (
         <Button
           label={server.signedIn ? "Sign out" : "Sign in"}
           size="sm"
@@ -361,6 +373,24 @@ function McpServerRow({
           }}
         />
       ) : null}
+      <Button label={server.disabled ? "Enable" : "Disable"} size="sm" variant="ghost" disabled={busy || running}
+        testId={`mcp-toggle-${server.name}`}
+        onClick={() => {
+          if (busy || getState().sessions.some((session) => session.status === "running")) return
+          setBusy(true)
+          setError(null)
+          void (async () => {
+            try {
+              setMcpDisabled(server.name, !server.disabled)
+              await reloadSkills()
+              onChanged()
+            } catch (reason) {
+              setError(reason instanceof Error ? reason.message : String(reason))
+            } finally {
+              setBusy(false)
+            }
+          })()
+        }} />
       <Button
         label="Remove"
         variant="ghost"
@@ -538,9 +568,11 @@ function UpdateRow({ update }: { update: UpdateStatus }) {
 
 export function Settings({ state }: { state: AppState }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
+  const [importing, setImporting] = useState(false)
 
   const focused = state.panes[state.focusedPane]?.sessionId ?? null
   const workspace = findWorkspace(state, findSession(state, focused)?.workspaceId ?? null)
+  const running = state.sessions.some((session) => session.status === "running")
 
   const alive = useRef(true)
 
@@ -668,14 +700,20 @@ export function Settings({ state }: { state: AppState }) {
             !loaded
               ? "Reading…"
               : loaded.servers.length > 0
-                ? "Configured in ~/.fx-ui/mcp.json, never from a workspace. A remote server's tools ask before they run."
+                ? running
+                  ? "Wait for running turns to finish before importing, enabling, or disabling servers."
+                  : "Configured in ~/.fx-ui/mcp.json, never from a workspace. A remote server's tools ask before they run."
                 : "None configured. Add them to ~/.fx-ui/mcp.json: a `command` for a local one, a `url` for a remote one."
           }
-        />
+          expanded={importing ? <McpImport onClose={() => setImporting(false)} onChanged={changed} /> : null}
+        >
+          {!importing ? <Button label="Import" size="sm" testId="mcp-import" onClick={() => setImporting(true)} /> : null}
+        </Row>
         {(loaded?.servers ?? []).map((server) => (
           <McpServerRow
             key={server.name}
             server={server}
+            running={running}
             onChanged={changed}
           />
         ))}
