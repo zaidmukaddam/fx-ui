@@ -9,7 +9,10 @@ import {
   addMcpServer,
   beginServerSignIn,
   listMcpServers,
+  MCP_CONFIG_FILE,
+  readWorkspaceBindings,
   removeMcpServer,
+  setConnectionUsed,
   setMcpDisabled,
   signOutOfServer,
 } from "../workspace/mcp"
@@ -233,7 +236,13 @@ function ApiKeyRow({ state }: { state: AppState }) {
   )
 }
 
-function AddMcpServerRow({ onChanged }: { onChanged: () => void }) {
+function AddMcpServerRow({
+  workspacePath,
+  onChanged,
+}: {
+  workspacePath: string | null
+  onChanged: () => void
+}) {
   const [name, setName] = useState<string | null>(null)
   const [source, setSource] = useState("")
   const [error, setError] = useState<string | null>(null)
@@ -246,8 +255,13 @@ function AddMcpServerRow({ onChanged }: { onChanged: () => void }) {
   }
 
   const save = () => {
+    const trimmed = (name ?? "").trim()
     try {
-      addMcpServer(name ?? "", source)
+      addMcpServer(trimmed, source)
+      if (workspacePath && readWorkspaceBindings()[workspacePath]) {
+        const added = listMcpServers().find((server) => server.name === trimmed)
+        if (added) setConnectionUsed(workspacePath, added.id, true)
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
       return
@@ -315,10 +329,12 @@ function AddMcpServerRow({ onChanged }: { onChanged: () => void }) {
 function McpServerRow({
   server,
   running,
+  workspacePath,
   onChanged,
 }: {
   server: Server
   running: boolean
+  workspacePath: string | null
   onChanged: () => void
 }) {
   const [busy, setBusy] = useState(false)
@@ -328,7 +344,7 @@ function McpServerRow({
     setError(null)
     setBusy(true)
     try {
-      const flow = await beginServerSignIn(server.name, expandMcpValue(server.url!), null, openExternally)
+      const flow = await beginServerSignIn(server.id, expandMcpValue(server.url!), null, openExternally)
       await flow.completed
       await reloadSkills()
       onChanged()
@@ -349,6 +365,8 @@ function McpServerRow({
       ? "Waiting for the browser to finish the sign-in."
       : server.disabled
         ? "Disabled. This server will not connect until enabled."
+      : workspacePath && !server.used
+        ? "Not used in this workspace."
       : server.url
         ? server.signedIn
           ? `${host} · signed in · ${server.tools} tools`
@@ -357,6 +375,27 @@ function McpServerRow({
 
   return (
     <Row title={server.name} detail={detail}>
+      {workspacePath ? (
+        <Button
+          label={server.used ? "Ignore here" : "Use here"}
+          size="sm"
+          variant="ghost"
+          disabled={busy || running}
+          testId={`mcp-use-${server.name}`}
+          onClick={() => {
+            if (busy || getState().sessions.some((session) => session.status === "running")) return
+            setBusy(true)
+            setError(null)
+            try {
+              setConnectionUsed(workspacePath, server.id, !server.used)
+              void reloadSkills().then(onChanged).finally(() => setBusy(false))
+            } catch (reason) {
+              setError(reason instanceof Error ? reason.message : String(reason))
+              setBusy(false)
+            }
+          }}
+        />
+      ) : null}
       {server.url && !server.disabled ? (
         <Button
           label={server.signedIn ? "Sign out" : "Sign in"}
@@ -368,7 +407,7 @@ function McpServerRow({
               void signIn()
               return
             }
-            signOutOfServer(server.name)
+            signOutOfServer(server.id, server.name)
             void reloadSkills().then(onChanged)
           }}
         />
@@ -398,7 +437,7 @@ function McpServerRow({
         disabled={busy}
         testId={`mcp-remove-${server.name}`}
         onClick={() => {
-          signOutOfServer(server.name)
+          signOutOfServer(server.id, server.name)
           removeMcpServer(server.name)
           void reloadSkills().then(onChanged)
         }}
@@ -588,7 +627,7 @@ export function Settings({ state }: { state: AppState }) {
         fx: version,
         fxStatus: status,
         skills: skills.names,
-        servers: listMcpServers(),
+        servers: listMcpServers(MCP_CONFIG_FILE, workspace?.path),
         cli: (["grok", "codex"] as const).filter(cliSignedIn),
       })
     })()
@@ -701,8 +740,10 @@ export function Settings({ state }: { state: AppState }) {
               ? "Reading…"
               : loaded.servers.length > 0
                 ? running
-                  ? "Wait for running turns to finish before importing, enabling, or disabling servers."
-                  : "Configured in ~/.fx-ui/mcp.json, never from a workspace. A remote server's tools ask before they run."
+                  ? "Wait for running turns to finish before importing, enabling, or changing which servers this workspace uses."
+                  : workspace
+                    ? "Saved in ~/.fx-ui/mcp.json. Ignore here keeps a connection out of this workspace. Tokens stay in your home folder, not in the repo."
+                    : "Saved in ~/.fx-ui/mcp.json. Open a workspace to choose which connections it uses."
                 : "None configured. Add them to ~/.fx-ui/mcp.json: a `command` for a local one, a `url` for a remote one."
           }
           expanded={importing ? <McpImport onClose={() => setImporting(false)} onChanged={changed} /> : null}
@@ -711,13 +752,14 @@ export function Settings({ state }: { state: AppState }) {
         </Row>
         {(loaded?.servers ?? []).map((server) => (
           <McpServerRow
-            key={server.name}
+            key={server.id}
             server={server}
             running={running}
+            workspacePath={workspace?.path ?? null}
             onChanged={changed}
           />
         ))}
-        <AddMcpServerRow onChanged={changed} />
+        <AddMcpServerRow workspacePath={workspace?.path ?? null} onChanged={changed} />
       </Section>
 
       <Section title="About">

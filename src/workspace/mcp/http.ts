@@ -36,12 +36,14 @@ export class HttpWire implements Wire {
   private initialised = false
 
   constructor(
+    private readonly id: string,
     private readonly name: string,
     private readonly config: RemoteServer,
   ) {}
 
   private async headers(): Promise<Record<string, string>> {
-    const token = await accessTokenFor(this.name)
+    const token = (await accessTokenFor(this.id))
+      ?? (this.name !== this.id ? await accessTokenFor(this.name) : null)
     return {
       ...this.config.headers,
       "content-type": "application/json",

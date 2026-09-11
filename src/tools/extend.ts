@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
-import { findMcpTool, listMcpServers, listMcpTools } from "../workspace/mcp"
+import { findMcpTool, listMcpServers, listMcpTools, MCP_CONFIG_FILE } from "../workspace/mcp"
 import { loadSkills } from "../workspace/skills"
 import {
   adopt,
@@ -135,7 +135,7 @@ export function extensionTools(context: ToolContext): HostTool[] {
             .filter((skill) => matches(`${skill.name} ${skill.description}`))
             .map((skill) => `skill  ${skill.name}: ${skill.description || "no description"}`)
 
-          const servers = listMcpTools()
+          const servers = listMcpTools(ctx.root)
             .filter((tool) => matches(`${tool.name} ${tool.description}`))
             .map((tool) => `mcp    ${tool.name}: ${tool.description}`)
 
@@ -162,8 +162,8 @@ export function extensionTools(context: ToolContext): HostTool[] {
         inputSchema: { type: "object", properties: {} },
         parse: () => ({}),
         label: () => "mcp features",
-        run: async () => {
-          const servers = listMcpServers()
+        run: async (_input, ctx) => {
+          const servers = listMcpServers(MCP_CONFIG_FILE, ctx.root).filter((server) => server.used && !server.disabled)
           if (servers.length === 0) {
             return {
               text: "No MCP servers are connected. They are configured in ~/.fx-ui/mcp.json.",
@@ -196,10 +196,10 @@ export function extensionTools(context: ToolContext): HostTool[] {
         },
         parse: (input) => ({ name: requireString(input, "name") }),
         label: (input) => input.name,
-        run: async (input) => {
-          const tool = findMcpTool(input.name)?.tool
+        run: async (input, ctx) => {
+          const tool = findMcpTool(input.name, ctx.root)?.tool
           if (!tool) {
-            const known = listMcpTools().map((entry) => entry.name)
+            const known = listMcpTools(ctx.root).map((entry) => entry.name)
             throw new Error(
               known.length > 0
                 ? `No MCP tool named ${input.name}. Available: ${known.join(", ")}.`
@@ -238,13 +238,13 @@ export function extensionTools(context: ToolContext): HostTool[] {
         if (!args || typeof args !== "object" || Array.isArray(args)) {
           throw new Error("`arguments` is required and must be an object.")
         }
-        const entry = findMcpTool(name)
+        const entry = findMcpTool(name, context.root)
         if (!entry) throw new Error(`No MCP tool named ${name}. Use capability_search to find an available tool.`)
         if (signal.aborted) throw new Error("cancelled")
         await gate({ ...context, name }, {
           title: `Run ${name}`,
           detail: JSON.stringify(args),
-          scope: `mcp:${entry.server}`,
+          scope: entry.scope,
           denied: `${name} was not run.`,
         })
         if (signal.aborted) throw new Error("cancelled")

@@ -36,10 +36,19 @@ import {
   addMcpServer,
   authorisedServers,
   beginServerSignIn,
+  connectionsToLoad,
+  findMcpTool,
+  listMcpTools,
   loadMcp,
+  mcpGrantLabel,
+  mcpGrantScope,
+  pruneMcpGrants,
+  readConnections,
   readMcpConfig,
+  readWorkspaceBindings,
   removeMcpServer,
   resetMcp,
+  setConnectionUsed,
   signOutOfServer,
   storedAuth,
 } from "./src/workspace/mcp"
@@ -1103,6 +1112,7 @@ describe("mcp import", () => {
     expect(saved.mcpServers.existing.futureOption).toBe("keep")
     expect(saved.mcpServers.unknown).toEqual({ futureTransport: "keep" })
     expect(saved.mcpServers.selected.disabled).toBe(true)
+    expect(saved.mcpServers.selected.id).toMatch(/^[0-9a-f]{8}$/)
     expect(saved.mcpServers.ignored).toBeUndefined()
     expect(statSync(target).mode & 0o777).toBe(0o600)
     expect(readFileSync(cursor, "utf8")).toBe(original)
@@ -1356,15 +1366,24 @@ function reply(id, result) {
     const port = (server.address() as { port: number }).port
 
     const file = path.join(tempDir(), "mcp.json")
+    const endpointFile = path.join(tempDir(), "endpoint")
+    const endpoint = `http://127.0.0.1:${port}/mcp`
+    writeFileSync(endpointFile, endpoint)
     writeFileSync(
       file,
-      JSON.stringify({ mcpServers: { remote: { url: `http://127.0.0.1:${port}/mcp` } } }),
+      JSON.stringify({ mcpServers: { remote: { url: `\${file:${endpointFile}}` } } }),
     )
 
     const loaded = await loadMcp(file)
     try {
       expect(loaded.problems).toEqual([])
       expect(loaded.names).toEqual(["remote"])
+      const scope = mcpGrantScope("remote", { url: endpoint })
+      expect(loaded.tools[0]!.scope).toBe(scope)
+      expect(pruneMcpGrants([scope], file)).toEqual([scope])
+      writeFileSync(endpointFile, `${endpoint}/changed`)
+      expect(pruneMcpGrants([scope], file)).toEqual([])
+      expect(loaded.tools[0]!.scope).toBe(scope)
       const ping = loaded.tools.find((entry) => entry.tool.name.includes("ping"))?.tool
       expect(ping).toBeDefined()
 
@@ -1412,20 +1431,24 @@ function reply(id, result) {
       })
     })
     await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready))
-    const file = path.join(tempDir(), "mcp.json")
-    writeFileSync(file, JSON.stringify({ mcpServers: { linear: { url: `http://127.0.0.1:${(server.address() as { port: number }).port}/mcp` } } }))
-    const loaded = await acquireMcp(file)
+    mkdirSync(DIR, { recursive: true })
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/mcp`
+    const { session, tools, root } = seed("ask")
+    const file = path.join(DIR, "mcp.json")
+    writeFileSync(file, JSON.stringify({ mcpServers: { linear: { url } } }))
+    const loaded = await acquireMcp(file, root)
     try {
       expect(loaded.problems).toEqual([])
       expect(loaded.tools).toHaveLength(70)
-      const { session, tools } = seed("ask")
       const last = loaded.tools.at(-1)!.tool.name
+      expect(listMcpTools(`${root}/unloaded-workspace`)).toEqual([])
+      expect(findMcpTool(last, `${root}/unloaded-workspace`)).toBeUndefined()
       expect(await run(tools.capability_search!, { query: "tool_69" })).toContain(last)
       expect(await run(tools.mcp_select_tool!, { name: last })).toContain("mcp_call_tool")
       const denied = run(tools.mcp_call_tool!, { name: last, arguments: { value: "denied" } })
       const rejection = expect(denied).rejects.toThrow(/Denied by the user/)
       const prompt = await waitForApproval(session.id)
-      expect(prompt.scope).toBe("mcp:linear")
+      expect(prompt.scope).toBe(mcpGrantScope("linear", { url }))
       resolveApproval(session.id, prompt.approvalId, "denied")
       await rejection
       expect(calls).toEqual([])
@@ -1476,6 +1499,7 @@ function reply(id, result) {
     } finally {
       await loaded.release()
       await resetMcp()
+      writeFileSync(file, JSON.stringify({ mcpServers: {} }))
       server.close()
     }
   })
@@ -1495,9 +1519,9 @@ function reply(id, result) {
       return Response.json({ jsonrpc: "2.0", id: message.id, result })
     }) as typeof fetch
     try {
-      const loaded = await acquireMcp(file)
+      const { tools, root } = seed("full-access")
+      const loaded = await acquireMcp(file, root)
       expect(loaded.problems).toEqual([])
-      const { tools } = seed("full-access")
       await expect(run(tools.mcp_select_tool!, { name: "abc" })).rejects.toThrow(/shared by multiple servers/)
       await expect(run(tools.mcp_call_tool!, { name: "abc", arguments: {} })).rejects.toThrow(/shared by multiple servers/)
       expect(calls).toEqual([])
@@ -1683,6 +1707,7 @@ function reply(id, result) {
       files: { command: "npx", args: ["-y", "server-filesystem", "/tmp"], env: undefined },
     })
     expect(JSON.parse(readFileSync(file, "utf8")).note).toBe("keep me")
+    expect(JSON.parse(readFileSync(file, "utf8")).mcpServers.linear.id).toMatch(/^[0-9a-f]{8}$/)
 
     expect(() => addMcpServer("linear", "https://x.example/mcp", file)).toThrow(
       /already configured/,
@@ -1778,6 +1803,143 @@ function reply(id, result) {
     expect(loaded.tools).toEqual([])
     expect(loaded.problems[0]?.server).toBe("gone")
     await loaded.close()
+  })
+
+  it("treats a missing id as the display name and writes one on add", () => {
+    const file = path.join(tempDir(), "mcp.json")
+    writeFileSync(file, JSON.stringify({ mcpServers: { linear: { url: "https://mcp.linear.app/mcp" } } }))
+    expect(readConnections(file)).toEqual([
+      { id: "linear", name: "linear", config: { url: "https://mcp.linear.app/mcp", headers: undefined } },
+    ])
+    addMcpServer("github", "https://api.githubcopilot.com/mcp/", file)
+    const github = readConnections(file).find((entry) => entry.name === "github")!
+    expect(github.id).toMatch(/^[0-9a-f]{8}$/)
+    expect(github.id).not.toBe("github")
+  })
+
+  it("loads only the connections bound to that workspace path, without parent merging", async () => {
+    const file = path.join(tempDir(), "mcp.json")
+    writeFileSync(file, JSON.stringify({
+      mcpServers: {
+        here: { id: "id-here", command: "definitely-not-here" },
+        there: { id: "id-there", command: "definitely-not-there" },
+      },
+      workspaceConnections: {
+        "/repo": ["id-here"],
+        "/repo/pkg": [],
+      },
+    }))
+    expect(connectionsToLoad(file).map((entry) => entry.name).sort()).toEqual(["here", "there"])
+    expect(connectionsToLoad(file, "/repo").map((entry) => entry.name)).toEqual(["here"])
+    expect(connectionsToLoad(file, "/repo/pkg")).toEqual([])
+    expect(connectionsToLoad(file, "/other").map((entry) => entry.name).sort()).toEqual(["here", "there"])
+    const loaded = await loadMcp(file, "/repo")
+    expect(loaded.problems.map((entry) => entry.server)).toEqual(["here"])
+    await loaded.close()
+  })
+
+  it("does not start a disabled connection even when the workspace lists it", async () => {
+    const file = path.join(tempDir(), "mcp.json")
+    writeFileSync(file, JSON.stringify({
+      mcpServers: {
+        live: { id: "id-live", command: "definitely-not-live" },
+        paused: { id: "id-paused", command: "definitely-not-paused", disabled: true },
+      },
+      workspaceConnections: { "/repo": ["id-live", "id-paused"] },
+    }))
+    expect(connectionsToLoad(file, "/repo").map((entry) => entry.name)).toEqual(["live"])
+  })
+
+  it("turns implicit all into an explicit list on the first ignore, and keeps new servers out of that list", () => {
+    const file = path.join(tempDir(), "mcp.json")
+    const workspace = "/repo"
+    writeFileSync(file, JSON.stringify({
+      mcpServers: {
+        keep: { id: "id-keep", url: "https://example.invalid/keep" },
+        skip: { id: "id-skip", url: "https://example.invalid/skip" },
+      },
+    }))
+    setConnectionUsed(workspace, "id-skip", false, file)
+    expect(readWorkspaceBindings(file)[workspace]).toEqual(["id-keep"])
+    addMcpServer("extra", "https://example.invalid/extra", file)
+    expect(readWorkspaceBindings(file)[workspace]).toEqual(["id-keep"])
+    const extra = readConnections(file).find((entry) => entry.name === "extra")!
+    setConnectionUsed(workspace, extra.id, true, file)
+    expect(readWorkspaceBindings(file)[workspace]).toEqual(["id-keep", extra.id])
+  })
+
+  it("drops a removed connection from workspace lists", () => {
+    const file = path.join(tempDir(), "mcp.json")
+    writeFileSync(file, JSON.stringify({
+      mcpServers: {
+        keep: { id: "id-keep", url: "https://example.invalid/keep" },
+        gone: { id: "id-gone", url: "https://example.invalid/gone" },
+      },
+      workspaceConnections: { "/a": ["id-keep", "id-gone"], "/b": ["id-gone"] },
+    }))
+    removeMcpServer("gone", file)
+    expect(readWorkspaceBindings(file)).toEqual({ "/a": ["id-keep"], "/b": [] })
+    expect(readConnections(file).map((entry) => entry.name)).toEqual(["keep"])
+  })
+
+  it("scopes MCP grants to the connection id and execution target, not token headers", () => {
+    const file = path.join(tempDir(), "mcp.json")
+    const url = "https://mcp.linear.app/mcp"
+    writeFileSync(file, JSON.stringify({ mcpServers: { linear: { id: "lin-1", url, headers: { Authorization: "old" } } } }))
+    const scope = mcpGrantScope("lin-1", { url })
+    expect(scope).toMatch(/^mcp:lin-1:[0-9a-f]{12}$/)
+    expect(mcpGrantScope("lin-1", { url, headers: { Authorization: "new" } })).toBe(scope)
+    expect(mcpGrantScope("lin-1", { url: "https://mcp.linear.app/other" })).not.toBe(scope)
+    expect(mcpGrantScope("lin-1", { command: "npx", args: ["-y", "a"] })).not.toBe(
+      mcpGrantScope("lin-1", { command: "npx", args: ["-y", "b"] }),
+    )
+    expect(mcpGrantLabel(scope, file)).toBe("Use linear tools")
+    expect(pruneMcpGrants(["write", "mcp:linear", scope], file)).toEqual(["write", scope])
+    writeFileSync(file, JSON.stringify({ mcpServers: { linear: { id: "lin-1", url: "https://mcp.linear.app/other" } } }))
+    expect(pruneMcpGrants(["write", scope], file)).toEqual(["write"])
+  })
+
+  it("revokes grants when an environment variable changes the resolved endpoint", () => {
+    const file = path.join(tempDir(), "mcp.json")
+    const config = { url: "https://${env:FX_TEST_MCP_HOST}/mcp" }
+    writeFileSync(file, JSON.stringify({ mcpServers: { remote: config } }))
+    try {
+      vi.stubEnv("FX_TEST_MCP_HOST", "first.example")
+      const scope = mcpGrantScope("remote", resolveMcpConfig(config))
+      expect(pruneMcpGrants([scope], file)).toEqual([scope])
+      vi.stubEnv("FX_TEST_MCP_HOST", "second.example")
+      expect(pruneMcpGrants([scope], file)).toEqual([])
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it("revokes local grants when resolved args, command, or working directory change", () => {
+    const file = path.join(tempDir(), "mcp.json")
+    const envFile = path.join(tempDir(), "server.env")
+    const config = { command: "${env:SERVER}", args: ["${env:PROJECT}"], cwd: "${env:ROOT}", envFile }
+    writeFileSync(file, JSON.stringify({ mcpServers: { local: config } }))
+    const original = "SERVER=./server\nPROJECT=one\nROOT=/first\nTOKEN=old\n"
+    writeFileSync(envFile, original)
+    const scope = mcpGrantScope("local", resolveMcpConfig(config))
+    for (const [before, after] of [["./server", "./other"], ["PROJECT=one", "PROJECT=two"], ["/first", "/second"]]) {
+      writeFileSync(envFile, original.replace(before!, after!))
+      expect(pruneMcpGrants([scope], file)).toEqual([])
+    }
+    writeFileSync(envFile, original.replace("TOKEN=old", "TOKEN=new"))
+    expect(pruneMcpGrants([scope], file)).toEqual([scope])
+  })
+
+  it("drops unresolvable grants without blocking other connections", () => {
+    const file = path.join(tempDir(), "mcp.json")
+    const config = { command: "./server", args: [], cwd: "/first" }
+    const scope = mcpGrantScope("local", config)
+    writeFileSync(file, JSON.stringify({ mcpServers: {
+      local: { ...config, envFile: path.join(tempDir(), "missing.env") },
+      remote: { url: "https://example.com/mcp" },
+    } }))
+    const remote = mcpGrantScope("remote", { url: "https://example.com/mcp" })
+    expect(pruneMcpGrants(["write", scope, remote], file)).toEqual(["write", remote])
   })
 })
 
@@ -2500,6 +2662,33 @@ process.stdin.on("data", chunk => {
       await app.close()
     }
   }, 20_000)
+
+  it("can ignore an MCP server in this workspace without disabling it", async () => {
+    const { root } = seed()
+    const file = path.join(DIR, "mcp.json")
+    writeFileSync(file, JSON.stringify({
+      mcpServers: {
+        keep: { id: "id-keep", command: "definitely-not-keep" },
+        skip: { id: "id-skip", command: "definitely-not-skip" },
+      },
+    }))
+    setSettings(true)
+    const { renderer, app } = await mount(1100, 900)
+    try {
+      await app.getByTestId("mcp-use-skip").waitFor()
+      const scroll = await app.getByTestId("settings-scroll").bounds()
+      renderer.nativeSimulateScrollWheel(scroll.x + scroll.width / 2, scroll.y + 100, 0, -4_000)
+      renderer.flush()
+      await app.getByTestId("mcp-use-skip").click()
+      await vi.waitFor(() => expect(readWorkspaceBindings(file)[root]).toEqual(["id-keep"]))
+      expect(readMcpConfig(file).skip!.disabled).toBeFalsy()
+      await vi.waitFor(async () => expect(await app.getByTestId("mcp-use-skip").textContent()).toBe("Use here"))
+    } finally {
+      await app.close()
+      await resetMcp()
+      writeFileSync(file, JSON.stringify({ mcpServers: {} }))
+    }
+  })
 
   it("pins a default model from settings, and lets it go back to automatic", async () => {
     const workspace = createWorkspace(tempDir(), "demo")

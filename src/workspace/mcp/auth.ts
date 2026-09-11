@@ -28,11 +28,15 @@ export function authorisedServers(): string[] {
   return Object.keys(store.read())
 }
 
-export function signOutOfServer(server: string): void {
+export function signOutOfServer(...keys: string[]): void {
   const current = store.read()
-  if (!(server in current)) return
-  delete current[server]
-  store.write(current)
+  let changed = false
+  for (const key of new Set(keys.filter(Boolean))) {
+    if (!(key in current)) continue
+    delete current[key]
+    changed = true
+  }
+  if (changed) store.write(current)
 }
 
 function save(server: string, auth: ServerAuth): void {
