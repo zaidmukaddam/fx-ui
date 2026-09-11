@@ -260,6 +260,19 @@ The answer that ends a turn has a copy button under it.
 write created it. It refuses when the file has changed since, so a newer change
 is never thrown away. The last twenty writes of a session are remembered.
 
+### Restore this turn
+
+In a git workspace whose directory is the repository root, a turn snapshots the
+worktree through a temporary index seeded with tracked files, so ignore rules
+cannot hide tracked content and the user's staging is preserved. It also records
+the real index. `⌘K` → *Restore this turn's files* puts both back if nothing has
+changed since the turn ended. Files the turn created
+are removed. A directory that is not a repository, or is only a subdirectory of
+one, stays on per-file undo. Git restores file/directory transitions through the
+temporary index before the original staging is restored. Ignored untracked files
+are not snapshotted; restore refuses if they overlap a path being restored.
+Restore does not uncommit and is remembered only for this session, like undo.
+
 ### Project instructions
 
 `AGENTS.md` (or `CLAUDE.md`) at the workspace root is loaded into the system

@@ -41,6 +41,7 @@ import { type ProviderId } from "./oauth"
 import { refreshGitStatus } from "../workspace/git"
 import { loadSkills, splitCommand, type SkillCommand } from "../workspace/skills"
 import { acquireMcp, resetMcp, type McpLease } from "../workspace/mcp"
+import { beginTurn, endTurn, forgetTurn } from "../workspace/turns"
 
 type Runtime = {
   agent: Agent
@@ -477,13 +478,15 @@ export async function send(
   const stream = new Stream(sessionId)
   let completed = false
   try {
-    const runtime = await runtimeFor(sessionId)
-
     const state = getState()
     const workspace = findWorkspace(
       state,
       findSession(state, sessionId)?.workspaceId ?? null,
     )
+    if (workspace) await beginTurn(sessionId, workspace.path)
+
+    const runtime = await runtimeFor(sessionId)
+
     const { blocks, problems } = workspace
       ? mentionBlocks(workspace.path, trimmed)
       : { blocks: [], problems: [] }
@@ -534,6 +537,8 @@ export async function send(
     denyPendingApprovals(sessionId)
     dismissPendingQuestions(sessionId)
     const workspaceId = findSession(getState(), sessionId)?.workspaceId
+    const workspace = findWorkspace(getState(), workspaceId ?? null)
+    if (workspace) await endTurn(sessionId, workspace.path)
     if (workspaceId) void refreshGitStatus(workspaceId)
   }
 
@@ -597,6 +602,7 @@ export async function closeSession(sessionId: string): Promise<void> {
   await disposeRuntime(sessionId, runtime, { checkpoint: false })
   forgetToolResults(sessionId)
   forgetEdits(sessionId)
+  forgetTurn(sessionId)
   forgetQueue(sessionId)
   stopBackgroundCommands(sessionId)
 }
