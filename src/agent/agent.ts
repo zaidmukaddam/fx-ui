@@ -12,13 +12,16 @@ import {
   CHECKPOINT_DIR,
   appendMessage,
   appendStreamedText,
+  enqueuePrompt,
   findSession,
   findWorkspace,
+  forgetQueue,
   getState,
   newId,
   notice,
   removeMessage,
   sessionModel,
+  shiftQueue,
   NO_CREDENTIAL,
   updateSession,
 } from "../store"
@@ -53,6 +56,7 @@ type Runtime = {
 }
 
 const runtimes = new Map<string, Runtime>()
+const cancelled = new Set<string>()
 
 const FLUSH_MS = 16
 
@@ -408,7 +412,20 @@ export async function send(
   images: string[] = [],
 ): Promise<void> {
   const trimmed = prompt.trim()
-  if (!trimmed && images.length === 0) return
+  const current = findSession(getState(), sessionId)
+  if (!current) return
+
+  if (current.status === "running") {
+    if (!trimmed && images.length === 0) return
+    enqueuePrompt(sessionId, trimmed, images)
+    return
+  }
+
+  if (!trimmed && images.length === 0) {
+    const next = shiftQueue(sessionId)
+    if (next) await send(sessionId, next.text, next.images)
+    return
+  }
 
   if (!backing(findSession(getState(), sessionId))) {
     const isFirstTurn = !findSession(getState(), sessionId)?.messages.some(
@@ -456,7 +473,10 @@ export async function send(
   const topic = opening || trimmed
   if (topic && started?.title === fallbackTitle(opening)) void nameSession(sessionId, topic)
 
+  cancelled.delete(sessionId)
+
   const stream = new Stream(sessionId)
+  let completed = false
   try {
     const state = getState()
     const workspace = findWorkspace(
@@ -506,6 +526,7 @@ export async function send(
     if (outcome) notice(sessionId, "info", outcome)
     updateSession(sessionId, (session) => ({ ...session, status: "idle" }))
     await saveCheckpoint(sessionId, runtime.agent)
+    completed = result.stopReason === "end_turn"
   } catch (error) {
     stream.flush()
     const message =
@@ -520,9 +541,16 @@ export async function send(
     if (workspace) await endTurn(sessionId, workspace.path)
     if (workspaceId) void refreshGitStatus(workspaceId)
   }
+
+  const stopped = cancelled.delete(sessionId)
+  if (stopped || !completed) return
+  if (findSession(getState(), sessionId)?.status !== "idle") return
+  const next = shiftQueue(sessionId)
+  if (next) await send(sessionId, next.text, next.images)
 }
 
 export function cancel(sessionId: string): void {
+  cancelled.add(sessionId)
   denyPendingApprovals(sessionId)
   runtimes.get(sessionId)?.turn?.cancel()
 }
@@ -575,6 +603,7 @@ export async function closeSession(sessionId: string): Promise<void> {
   forgetToolResults(sessionId)
   forgetEdits(sessionId)
   forgetTurn(sessionId)
+  forgetQueue(sessionId)
   stopBackgroundCommands(sessionId)
 }
 

@@ -7,7 +7,7 @@ const pkg = (await Bun.file(path.join(root, "package.json")).json()) as { versio
 const dist = path.join(root, "dist")
 const app = path.join(dist, "fx.app")
 const contents = path.join(app, "Contents")
-const icon = path.join(root, "assets", "icon.png")
+const icon = path.join(root, "assets", "app-icon.png")
 const identity = process.env.SIGN_IDENTITY ?? "-"
 const entitlements = path.join(import.meta.dir, "entitlements.plist")
 

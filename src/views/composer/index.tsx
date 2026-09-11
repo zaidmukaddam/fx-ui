@@ -1,8 +1,15 @@
 import { useState } from "react"
 
 import { color, columnFor, FONT, nativeTheme, radius, space, text } from "../../ui/theme"
-import { IconButton, Thumbnail } from "../../ui/ui"
-import { canAnswer, setAttachments, useApp, type Session } from "../../store"
+import { IconButton, Label, Thumbnail } from "../../ui/ui"
+import {
+  canAnswer,
+  removeQueued,
+  setAttachments,
+  useApp,
+  type QueuedPrompt,
+  type Session,
+} from "../../store"
 import { CAN_PICK_IMAGES } from "../../workspace/images"
 import { ContextMeter } from "./context"
 import {
@@ -38,6 +45,56 @@ function fitsOneRow(draft: string, column: number): boolean {
   return draft.length <= Math.max(8, perRow)
 }
 
+function queuedLabel(item: QueuedPrompt): string {
+  const line = item.text.trim().split("\n")[0] ?? ""
+  if (line) return line
+  if (item.images.length === 1) return "1 image"
+  if (item.images.length > 1) return `${item.images.length} images`
+  return "Queued"
+}
+
+function Queue({ sessionId, items }: { sessionId: string; items: QueuedPrompt[] }) {
+  if (items.length === 0) return null
+
+  return (
+    <div
+      testId="queue"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: space.xs,
+        paddingTop: space.sm,
+      }}
+    >
+      {items.map((item) => (
+        <div
+          key={item.id}
+          testId={`queue-${item.id}`}
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: space.sm,
+            minWidth: 0,
+          }}
+        >
+          <Label truncate size={text.small} color={color.faint} grow>
+            {queuedLabel(item)}
+          </Label>
+          <IconButton
+            icon="x"
+            size={18}
+            tooltip="Remove from queue"
+            testId={`queue-dismiss-${item.id}`}
+            tone={color.ghost}
+            onClick={() => removeQueued(sessionId, item.id)}
+          />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function Composer({
   session,
   root,
@@ -57,7 +114,9 @@ export function Composer({
   const state = useApp()
   const running = session.status === "running"
   const attached = state.attachments[session.id] ?? []
-  const ready = (draft.trim().length > 0 || attached.length > 0) && !running
+  const queued = state.queue[session.id] ?? []
+  const hasContent = draft.trim().length > 0 || attached.length > 0
+  const canSend = hasContent || queued.length > 0
   const readyToAnswer = canAnswer(state, session)
 
   const tight = column < 340
@@ -68,11 +127,22 @@ export function Composer({
       picker.pick(picker.suggestions[picker.highlighted]!.value)
       return
     }
-    if (!ready) return
-    onSend(draft, attached)
-    setAttachments(session.id, [])
-    setDraft("")
-    picker.reset()
+    if (running) {
+      if (!hasContent) return
+      onSend(draft, attached)
+      setAttachments(session.id, [])
+      setDraft("")
+      picker.reset()
+      return
+    }
+    if (hasContent) {
+      onSend(draft, attached)
+      setAttachments(session.id, [])
+      setDraft("")
+      picker.reset()
+      return
+    }
+    if (queued.length > 0) onSend("", [])
   }
 
   const sendAffordance = running ? (
@@ -94,7 +164,7 @@ export function Composer({
       testId="send"
       tooltipSide="top"
       tooltipAlign="end"
-      tone={ready ? color.text : color.ghost}
+      tone={!running && canSend ? color.text : color.ghost}
       onClick={submit}
     />
   )
@@ -147,6 +217,7 @@ export function Composer({
           },
         }}
       >
+        <Queue sessionId={session.id} items={queued} />
         {attached.length > 0 ? (
           <div
             style={{
@@ -196,10 +267,12 @@ export function Composer({
             value={draft}
             placeholder={
               running
-                ? "Running · ⌘. to stop"
-                : readyToAnswer
-                  ? "Ask fx to change something"
-                  : "Add a key in Settings to send"
+                ? "Running · ⏎ to queue"
+                : !hasContent && queued.length > 0
+                  ? "⏎ sends the next queued prompt"
+                  : readyToAnswer
+                    ? "Ask fx to change something"
+                    : "Add a key in Settings to send"
             }
             minRows={1}
             maxRows={12}
