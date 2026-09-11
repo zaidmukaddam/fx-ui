@@ -2,6 +2,7 @@ import { memo, useState } from "react"
 import { motion } from "@gpuix/react"
 
 import { type IconName } from "../../ui/icons"
+import { useT } from "../../ui/i18n"
 import { color, columnFor, FONT, space, text } from "../../ui/theme"
 import { Button, Kbd, Label, Paragraph } from "../../ui/ui"
 import {
@@ -202,6 +203,7 @@ export function Transcript({
   paneWidth: number
 }) {
   const { column, gutter } = columnFor(paneWidth)
+  const t = useT()
   const rows = session.messages.filter(hasRow)
   const copyable = copyableIds(rows, session.status === "running")
   const [heldAt, setHeldAt] = useState<number | null>(null)
@@ -212,10 +214,10 @@ export function Transcript({
     if (!ready) {
       return (
         <EmptyState
-          title="Nothing can answer yet"
-          description="Add an AI Gateway key, or sign in to Grok or Codex."
+          title={t("empty.nothingAnswers.title")}
+          description={t("empty.nothingAnswers.desc")}
           action={{
-            label: "Open settings",
+            label: t("empty.openSettings"),
             icon: "settings",
             onClick: () => setSettings(true),
             testId: "empty-setup",
@@ -329,38 +331,39 @@ export function NoSession({
   workspace: Workspace | null
   onAddWorkspace: () => void
 }) {
+  const t = useT()
   if (!workspace) {
     return (
       <EmptyState
-        title="Add a workspace"
-        description="A workspace is the directory the agent works in. Everything it reads, edits, and runs stays inside it."
+        title={t("empty.addWorkspace.title")}
+        description={t("empty.addWorkspace.desc")}
         action={{
-          label: "Add workspace",
+          label: t("empty.addWorkspace.action"),
           icon: "folderPlus",
           onClick: onAddWorkspace,
           testId: "empty-add-workspace",
         }}
         hints={[
-          { keys: "⌘⇧O", label: "add workspace" },
-          { keys: "⌘K", label: "commands" },
+          { keys: "⌘⇧O", label: t("hint.addWorkspace") },
+          { keys: "⌘K", label: t("hint.commands") },
         ]}
       />
     )
   }
   return (
     <EmptyState
-      title="No session open"
-      description={`Start a conversation in ${workspace.name}. Type @ to attach a file, / to run a skill.`}
+      title={t("empty.noSession.title")}
+      description={t("empty.noSession.desc", { name: workspace.name })}
       action={{
-        label: "New session",
+        label: t("empty.noSession.action"),
         icon: "plus",
         onClick: () => startSession(workspace.id),
         testId: "empty-new-session",
       }}
       hints={[
-        { keys: "⌘N", label: "new session" },
-        { keys: "⌘K", label: "commands" },
-        { keys: "⌘\\", label: "split" },
+        { keys: "⌘N", label: t("hint.newSession") },
+        { keys: "⌘K", label: t("hint.commands") },
+        { keys: "⌘\\", label: t("hint.split") },
       ]}
     />
   )

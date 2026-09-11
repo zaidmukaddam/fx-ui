@@ -103,14 +103,18 @@ export async function gitLog(
   return result.stdout
 }
 
-export function summarise(status: GitStatus): string {
+export function summarise(status: GitStatus, t?: (key: string, params?: Record<string, string | number>) => string): string {
+  const tr = t ?? ((_key: string, params?: Record<string, string | number>) => "")
+  const label = (key: string, fallback: string, n: number): string =>
+    t ? tr(key, { n }) : fallback
   const parts: string[] = []
-  if (status.staged > 0) parts.push(`${status.staged} staged`)
-  if (status.unstaged > 0) parts.push(`${status.unstaged} modified`)
-  if (status.untracked > 0) parts.push(`${status.untracked} untracked`)
-  if (status.ahead > 0) parts.push(`${status.ahead} ahead`)
-  if (status.behind > 0) parts.push(`${status.behind} behind`)
-  return parts.length > 0 ? `${status.branch} · ${parts.join(", ")}` : `${status.branch} · clean`
+  if (status.staged > 0) parts.push(label("git.staged", `${status.staged} staged`, status.staged))
+  if (status.unstaged > 0) parts.push(label("git.modified", `${status.unstaged} modified`, status.unstaged))
+  if (status.untracked > 0) parts.push(label("git.untracked", `${status.untracked} untracked`, status.untracked))
+  if (status.ahead > 0) parts.push(label("git.ahead", `${status.ahead} ahead`, status.ahead))
+  if (status.behind > 0) parts.push(label("git.behind", `${status.behind} behind`, status.behind))
+  const clean = t ? tr("git.clean") : "clean"
+  return parts.length > 0 ? `${status.branch} · ${parts.join(", ")}` : `${status.branch} · ${clean}`
 }
 
 export async function refreshGitStatus(workspaceId: string): Promise<void> {

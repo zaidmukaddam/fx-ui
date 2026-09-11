@@ -1,4 +1,6 @@
-import { credential, PROVIDERS, type ProviderId } from "./oauth"
+import { credential, isOAuthProvider, oauthSpec, PROVIDERS, type ProviderId } from "./oauth"
+import { kiroAuth } from "./kiro-auth"
+import { describeImageKiro, kiroLanguageModel, listKiroModels } from "./kiro-runtime"
 import { dataOf, sseEvents, toResponsesRequest, translateStream, type Json } from "./responses"
 
 export const GATEWAY_LANGUAGE_MODEL_URL =
@@ -84,7 +86,7 @@ function clientVersion(
 ): Promise<string | null> {
   const known = versions.get(provider)
   if (known) return known
-  const asked = base(PROVIDERS[provider].versionUrl)
+  const asked = base(oauthSpec(provider).versionUrl)
     .then(async (response) => {
       if (!response.ok) return null
       if (provider === "grok") {
@@ -104,7 +106,7 @@ async function providerHeaders(
   auth: { token: string; accountId: string | null },
   base: typeof globalThis.fetch,
 ): Promise<Record<string, string>> {
-  const spec = PROVIDERS[provider]
+  const spec = oauthSpec(provider)
   const version = spec.versionHeader ? await clientVersion(provider, base) : null
   return {
     authorization: `Bearer ${auth.token}`,
@@ -119,7 +121,7 @@ async function catalogueUrl(
   provider: ProviderId,
   base: typeof globalThis.fetch,
 ): Promise<string> {
-  const spec = PROVIDERS[provider]
+  const spec = oauthSpec(provider)
   if (!spec.versionedCatalogue) return spec.catalogue
   const version = await clientVersion(provider, base)
   if (!version) throw new Error(`Could not read the ${spec.label} client version from npm.`)
@@ -130,6 +132,19 @@ export async function listProviderModels(
   provider: ProviderId,
   base: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<ProviderModel[]> {
+  if (provider === "kiro") {
+    const models = await listKiroModels(kiroAuth(), base)
+    return models.map((model) => ({
+      id: model.id,
+      name: model.name ?? model.id,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      efforts: [],
+      vision: true,
+      search: false,
+    }))
+  }
+
   const cached = catalogues.get(provider)
   if (cached && Date.now() - cached.at < CATALOGUE_TTL_MS) return cached.models
 
@@ -143,7 +158,7 @@ export async function listProviderModels(
   })
   if (!response.ok) throw new Error(`${PROVIDERS[provider].label} listed no models (HTTP ${response.status})`)
   const body = (await response.json()) as Json
-  const modalitiesUrl = PROVIDERS[provider].modalitiesUrl
+  const modalitiesUrl = oauthSpec(provider).modalitiesUrl
   const modalities = modalitiesUrl
     ? await base(modalitiesUrl, {
         headers: { authorization: `Bearer ${auth.token}`, accept: "application/json" },
@@ -165,7 +180,7 @@ export function parseCatalogue(
   body: Json,
   modalityBody: Json = {},
 ): ProviderModel[] {
-  const rows = (body[PROVIDERS[provider].catalogueField] as Json[] | undefined) ?? []
+  const rows = (body[oauthSpec(provider).catalogueField] as Json[] | undefined) ?? []
   const modalities = new Map<string, string[]>()
   for (const entry of (modalityBody.models as Json[] | undefined) ?? []) {
     const row = entry as Json
@@ -319,10 +334,16 @@ export async function describeImage(
   signal?: AbortSignal,
   base: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<string> {
+  if (provider === "kiro") {
+    const image = /^data:([^;,]+);base64,([\s\S]+)$/.exec(dataUrl)
+    if (!image) throw new Error("Kiro needs a base64-encoded image.")
+    return describeImageKiro(kiroAuth(), bareModel(model), prompt, image[1]!, image[2]!, signal, base)
+  }
+
   const auth = await credential(provider)
   if (!auth) throw new Error(`Not signed in to ${PROVIDERS[provider].label}.`)
 
-  const response = await base(PROVIDERS[provider].endpoint, {
+  const response = await base(oauthSpec(provider).endpoint, {
     method: "POST",
     headers: {
       ...(await providerHeaders(provider, auth, base)),
@@ -388,6 +409,28 @@ export function providerFetch(
       return watchUsage(await base(input as RequestInfo, init), route.onUsage)
     }
 
+    if (provider === "kiro") {
+      const auth = kiroAuth()
+      if (!(await auth.available())) {
+        return new Response(
+          JSON.stringify({ error: { message: "No Kiro login found. Sign in with Kiro IDE or Kiro CLI." } }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        )
+      }
+      const kiroBody = JSON.parse(
+        typeof init?.body === "string" ? init.body : Buffer.from(init?.body as never).toString("utf8"),
+      ) as Json
+      return kiroLanguageModel(
+        auth,
+        kiroBody,
+        bareModel(model),
+        route.effort,
+        base,
+        init?.signal ?? undefined,
+        route.onUsage,
+      )
+    }
+
     const auth = await credential(provider)
     if (!auth) {
       return new Response(
@@ -400,7 +443,7 @@ export function providerFetch(
       typeof init?.body === "string" ? init.body : Buffer.from(init?.body as never).toString("utf8"),
     ) as Json
 
-    const response = await base(PROVIDERS[provider].endpoint, {
+    const response = await base(oauthSpec(provider).endpoint, {
       method: "POST",
       headers: {
         ...(await providerHeaders(provider, auth, base)),

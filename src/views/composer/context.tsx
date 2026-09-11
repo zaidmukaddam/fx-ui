@@ -3,6 +3,7 @@ import { Select, SelectContent, SelectTrigger } from "@gpuix/react/select"
 import { color, radius, space, text } from "../../ui/theme"
 import { Label, overlayStyle } from "../../ui/ui"
 import { sessionModel, useApp, type Session } from "../../store"
+import { useT, type Translate } from "../../ui/i18n"
 import type { Limit } from "../../agent/providers"
 
 const RING_SIZE = 14
@@ -17,16 +18,17 @@ function ring(share: number): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="2.5"><circle cx="8" cy="8" r="${RING_RADIUS}" stroke-opacity="0.3"/><circle cx="8" cy="8" r="${RING_RADIUS}" stroke-dasharray="${drawn.toFixed(2)} ${circumference.toFixed(2)}" transform="rotate(-90 8 8)"/></svg>`
 }
 
-function resetIn(at: number): string {
+function resetIn(at: number, t: Translate): string {
   const minutes = Math.max(0, Math.round((at - Date.now()) / 60_000))
   if (minutes >= 1440) {
-    return `Resets in ${Math.floor(minutes / 1440)}d ${Math.floor((minutes % 1440) / 60)}h`
+    return t("context.resetDays", { d: Math.floor(minutes / 1440), h: Math.floor((minutes % 1440) / 60) })
   }
-  if (minutes >= 60) return `Resets in ${Math.floor(minutes / 60)}h ${minutes % 60}m`
-  return `Resets in ${minutes}m`
+  if (minutes >= 60) return t("context.resetHours", { h: Math.floor(minutes / 60), m: minutes % 60 })
+  return t("context.resetMinutes", { m: minutes })
 }
 
 function LimitRow({ limit }: { limit: Limit }) {
+  const t = useT()
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
       <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: space.md }}>
@@ -34,7 +36,7 @@ function LimitRow({ limit }: { limit: Limit }) {
           {limit.label}
         </Label>
         <Label size={text.small} color={color.tertiary}>
-          {`${limit.usedPercent}% used`}
+          {t("context.percentUsed", { percent: limit.usedPercent })}
         </Label>
       </div>
       <div
@@ -59,7 +61,7 @@ function LimitRow({ limit }: { limit: Limit }) {
       </div>
       {limit.resetsAt ? (
         <Label size={text.micro} color={color.tertiary}>
-          {resetIn(limit.resetsAt)}
+          {resetIn(limit.resetsAt, t)}
         </Label>
       ) : null}
     </div>
@@ -67,6 +69,7 @@ function LimitRow({ limit }: { limit: Limit }) {
 }
 
 export function ContextMeter({ session }: { session: Session }) {
+  const t = useT()
   const state = useApp()
   const capacity = sessionModel(state, session)?.contextWindow
   const plan = session.provider ? state.limits[session.provider] : undefined
@@ -76,12 +79,12 @@ export function ContextMeter({ session }: { session: Session }) {
   const whole = Math.max(capacity ?? used, used)
   const share = capacity ? used / whole : 0
   const parts = [
-    { label: "Messages", tokens: used - system - tools - mcp - skills, tint: "#8ab4f8" },
-    { label: "System prompt", tokens: system, tint: color.tertiary },
-    { label: "Tools", tokens: tools, tint: "#c7a2ff" },
-    { label: "MCP tools", tokens: mcp, tint: "#7cd07c" },
-    { label: "Skills", tokens: skills, tint: "#f5a623" },
-    { label: "Free space", tokens: whole - used, tint: color.border },
+    { label: t("context.messages"), tokens: used - system - tools - mcp - skills, tint: "#8ab4f8" },
+    { label: t("context.systemPrompt"), tokens: system, tint: color.tertiary },
+    { label: t("context.tools"), tokens: tools, tint: "#c7a2ff" },
+    { label: t("context.mcpTools"), tokens: mcp, tint: "#7cd07c" },
+    { label: t("context.skills"), tokens: skills, tint: "#f5a623" },
+    { label: t("context.freeSpace"), tokens: whole - used, tint: color.border },
   ].filter((part) => part.tokens > 0)
 
   return (
@@ -120,12 +123,12 @@ export function ContextMeter({ session }: { session: Session }) {
       >
         <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: space.md }}>
           <Label grow size={text.small} color={color.text}>
-            Context window
+            {t("context.window")}
           </Label>
           <Label size={text.small} color={color.tertiary}>
             {capacity
               ? `${COUNT.format(used)} / ${COUNT.format(capacity)} (${Math.round(share * 100)}%)`
-              : `${COUNT.format(used)} used`}
+              : t("context.used", { used: COUNT.format(used) })}
           </Label>
         </div>
 
@@ -193,7 +196,7 @@ export function ContextMeter({ session }: { session: Session }) {
           >
             <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: space.md }}>
               <Label grow size={text.small} color={color.text}>
-                Plan usage
+                {t("context.planUsage")}
               </Label>
               {plan.plan ? (
                 <Label size={text.small} color={color.tertiary}>

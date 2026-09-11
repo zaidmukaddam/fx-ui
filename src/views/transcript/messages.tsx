@@ -5,6 +5,7 @@ import { Icon } from "../../ui/icons"
 import { color, FONT, nativeTheme, radius, space, text } from "../../ui/theme"
 import { Button, IconButton, Label, Thumbnail } from "../../ui/ui"
 import { openExternally } from "../../agent/oauth"
+import { useT } from "../../ui/i18n"
 import { removeMessage, setSettings, type Message } from "../../store"
 import { GUTTER, Gutter, HoldTail, Row } from "./shared"
 
@@ -75,6 +76,7 @@ export function UserMessage({ message }: { message: Extract<Message, { kind: "us
 }
 
 function Reasoning({ body }: { body: string }) {
+  const t = useT()
   const [open, setOpen] = useState(false)
   const holdTail = useContext(HoldTail)
   return (
@@ -101,7 +103,7 @@ function Reasoning({ body }: { body: string }) {
       >
         <Icon name={open ? "chevronDown" : "chevronRight"} size={11} color={color.ghost} />
         <Label size={text.small} color={color.ghost}>
-          Reasoning
+          {t("msg.reasoning")}
         </Label>
       </div>
       {open ? (
@@ -138,6 +140,7 @@ export function AssistantMessage({
   message: Extract<Message, { kind: "assistant" }>
   copyable?: boolean
 }) {
+  const t = useT()
   const [copied, setCopied] = useState(false)
   return (
     <Row>
@@ -151,7 +154,7 @@ export function AssistantMessage({
             <IconButton
               icon={copied ? "check" : "copy"}
               size={22}
-              tooltip={copied ? "Copied" : "Copy"}
+              tooltip={copied ? t("msg.copied") : t("msg.copy")}
               testId={`copy-${message.id}`}
               tone={color.ghost}
               onClick={() => {
@@ -174,6 +177,7 @@ export function Notice({
   sessionId: string
   message: Extract<Message, { kind: "notice" }>
 }) {
+  const t = useT()
   const tone = message.tone === "error" ? color.danger : color.ghost
   return (
     <Row>
@@ -209,7 +213,7 @@ export function Notice({
         </text>
         {message.action === "settings" ? (
           <Button
-            label="Settings"
+            label={t("msg.settings")}
             size="sm"
             testId={`notice-settings-${message.id}`}
             onClick={() => setSettings(true)}
@@ -218,7 +222,7 @@ export function Notice({
         <IconButton
           icon="x"
           size={18}
-          tooltip="Dismiss"
+          tooltip={t("msg.dismiss")}
           testId={`notice-dismiss-${message.id}`}
           tone={color.ghost}
           onClick={() => removeMessage(sessionId, message.id)}

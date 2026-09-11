@@ -23,18 +23,23 @@ import {
   type Session,
 } from "../../store"
 import { ModelChoice, keyOf } from "../models"
+import { useT, type Translate } from "../../ui/i18n"
 
 const MONOSPACE_ADVANCE = 0.6
 
-const MODES: { value: PermissionMode; label: string; hint: string }[] = [
-  { value: "ask", label: "Ask", hint: "Every edit and command asks" },
-  { value: "auto", label: "Auto", hint: "Edits run, commands ask" },
-  {
-    value: "full-access",
-    label: "Full access",
-    hint: "Accept all permissions",
-  },
+const MODES: { value: PermissionMode }[] = [
+  { value: "ask" },
+  { value: "auto" },
+  { value: "full-access" },
 ]
+
+function modeLabel(t: Translate, value: PermissionMode): string {
+  return t(value === "ask" ? "mode.ask" : value === "auto" ? "mode.auto" : "mode.full")
+}
+
+function modeHint(t: Translate, value: PermissionMode): string {
+  return t(value === "ask" ? "mode.ask.hint" : value === "auto" ? "mode.auto.hint" : "mode.full.hint")
+}
 
 const Chip = forwardRef<
   PublicInstance,
@@ -76,6 +81,7 @@ const Chip = forwardRef<
 })
 
 export function ModelPicker({ session, compact }: { session: Session; compact: boolean }) {
+  const t = useT()
   const state = useApp()
   const ready = canAnswer(state, session)
   const implied =
@@ -93,7 +99,7 @@ export function ModelPicker({ session, compact }: { session: Session; compact: b
     <ModelChoice
       testId="model-picker"
       value={implied ? keyOf(implied) : null}
-      label={implied?.name ?? "No model"}
+      label={implied?.name ?? t("model.noModel")}
       maxWidth={compact ? 160 : 320}
       size={text.micro}
       onChange={(chosen) => {
@@ -115,12 +121,13 @@ function effortTriggerWidth(options: string[]): number {
 }
 
 export function FastToggle({ session }: { session: Session }) {
+  const t = useT()
   const tier = sessionModel(useApp(), session)?.fast
   if (!tier) return null
   const on = session.fast
 
   return (
-    <Explain lines={[tier.label, tier.detail, "Changing it restarts the conversation."]}>
+    <Explain lines={[tier.label, tier.detail, t("picker.restartsConversation")]}>
       <Chip
         testId="fast-toggle"
         active={on}
@@ -150,6 +157,7 @@ function EffortDial({
   onChange: (value: string) => void
   testId?: string
 }) {
+  const t = useT()
   const [drag, setDrag] = useState<{ from: number; at: number; offset: number } | null>(null)
 
   const index = Math.max(0, options.indexOf(value))
@@ -197,7 +205,7 @@ function EffortDial({
         }}
       >
         <Label size={text.small} color={color.tertiary}>
-          Effort
+          {t("effort.label")}
         </Label>
         <Label grow size={text.small} color={color.text}>
           {value}
@@ -213,10 +221,10 @@ function EffortDial({
         }}
       >
         <Label size={text.micro} color={color.ghost}>
-          Faster
+          {t("effort.faster")}
         </Label>
         <Label size={text.micro} color={color.ghost}>
-          Smarter
+          {t("effort.smarter")}
         </Label>
       </div>
 
@@ -349,6 +357,7 @@ export function EffortPicker({ session }: { session: Session }) {
 }
 
 export function BackgroundChip({ session }: { session: Session }) {
+  const t = useT()
   const running = useApp().background[session.id] ?? []
   const live = running.filter((entry) => entry.exit === null)
   if (live.length === 0) return null
@@ -361,7 +370,7 @@ export function BackgroundChip({ session }: { session: Session }) {
             style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color.tertiary }}
           />
           <Label size={text.micro} color={color.tertiary}>
-            {`${live.length} running`}
+            {t("picker.running", { count: live.length })}
           </Label>
         </Chip>
       </SelectTrigger>
@@ -387,7 +396,7 @@ export function BackgroundChip({ session }: { session: Session }) {
               {entry.command}
             </Label>
             <Button
-              label="Stop"
+              label={t("picker.stop")}
               size="sm"
               variant="ghost"
               testId={`stop-background-${entry.handle}`}
@@ -400,18 +409,19 @@ export function BackgroundChip({ session }: { session: Session }) {
   )
 }
 
-function grantLabel(scope: string): string {
-  if (scope === "write") return "Edit and create files"
-  if (scope === "install_skill") return "Install skills"
-  if (scope === "web:search") return "Search the web"
+function grantLabel(scope: string, t: Translate): string {
+  if (scope === "write") return t("grant.write")
+  if (scope === "install_skill") return t("grant.installSkill")
+  if (scope === "web:search") return t("grant.webSearch")
   const [, kind, target] = /^(cmd|web|mcp):(.+)$/.exec(scope) ?? []
-  if (kind === "cmd") return `Run ${target}`
-  if (kind === "web") return `Fetch from ${target}`
-  if (kind === "mcp") return `Use ${target} tools`
+  if (kind === "cmd") return t("grant.runCmd", { target: target! })
+  if (kind === "web") return t("grant.fetchFrom", { target: target! })
+  if (kind === "mcp") return t("grant.useMcp", { target: target! })
   return scope
 }
 
 export function ModePicker({ session }: { session: Session }) {
+  const t = useT()
   const current = MODES.find((mode) => mode.value === session.mode) ?? MODES[0]!
 
   return (
@@ -427,7 +437,7 @@ export function ModePicker({ session }: { session: Session }) {
       <SelectTrigger asChild>
         <Chip testId="permission-mode">
           <Label size={text.micro} color={color.tertiary}>
-            {current.label}
+            {modeLabel(t, current.value)}
           </Label>
           {session.grants.length > 0 ? (
             <Icon name="shieldAlert" size={11} color={color.ghost} />
@@ -474,10 +484,10 @@ export function ModePicker({ session }: { session: Session }) {
                   }}
                 >
                   <Label size={text.small} color={color.text}>
-                    {mode.label}
+                    {modeLabel(t, mode.value)}
                   </Label>
                   <Label size={text.micro} color={color.tertiary}>
-                    {mode.hint}
+                    {modeHint(t, mode.value)}
                   </Label>
                 </div>
                 {state.selected ? (
@@ -509,10 +519,10 @@ export function ModePicker({ session }: { session: Session }) {
               }}
             >
               <Label grow size={text.micro} color={color.tertiary}>
-                Allowed without asking
+                {t("grant.allowedWithout")}
               </Label>
               <Button
-                label="Forget all"
+                label={t("grant.forgetAll")}
                 size="sm"
                 variant="ghost"
                 testId="forget-grants"
@@ -532,10 +542,10 @@ export function ModePicker({ session }: { session: Session }) {
                 }}
               >
                 <Label grow truncate size={text.small} color={color.text}>
-                  {grantLabel(scope)}
+                  {grantLabel(scope, t)}
                 </Label>
                 <Button
-                  label="Forget"
+                  label={t("grant.forget")}
                   size="sm"
                   variant="ghost"
                   testId={`forget-grant-${scope}`}
@@ -551,14 +561,23 @@ export function ModePicker({ session }: { session: Session }) {
 }
 
 const ATTACH_ACTIONS = [
-  { value: "choose", label: "Choose images…", hint: "From your Mac" },
-  { value: "paste", label: "Paste image", hint: "⌘V" },
-  { value: "mention", label: "Mention a file", hint: "@" },
+  { value: "choose" },
+  { value: "paste" },
+  { value: "mention" },
 ]
+
+function attachLabel(t: Translate, value: string): string {
+  return value === "choose" ? t("attach.choose") : value === "paste" ? t("attach.paste") : t("attach.mention")
+}
+
+function attachHint(t: Translate, value: string): string {
+  return value === "choose" ? t("attach.choose.hint") : value === "paste" ? "⌘V" : "@"
+}
 
 type FilePanel = { promptForPaths?: (elementId: number, multiple: boolean) => void }
 
 export function AttachMenu({ session, onMention }: { session: Session; onMention: () => void }) {
+  const t = useT()
   const panel = useGpuix().renderer as unknown as FilePanel | null
   const trigger = useRef<PublicInstance>(null)
 
@@ -629,10 +648,10 @@ export function AttachMenu({ session, onMention }: { session: Session; onMention
             {() => (
               <>
                 <Label grow size={text.small} color={color.text}>
-                  {action.label}
+                  {attachLabel(t, action.value)}
                 </Label>
                 <Label size={text.micro} color={color.ghost}>
-                  {action.hint}
+                  {attachHint(t, action.value)}
                 </Label>
               </>
             )}

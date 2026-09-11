@@ -79,7 +79,7 @@ export type Session = {
   updatedAt: number
   model: string | null
   modelName: string | null
-  provider: "grok" | "codex" | null
+  provider: "grok" | "codex" | "kiro" | null
   effort: string | null
   fast: boolean
   mode: PermissionMode
@@ -98,7 +98,7 @@ export type Workspace = {
 
 export type Pane = { sessionId: string | null }
 
-export type Account = { provider: "grok" | "codex"; account: string | null }
+export type Account = { provider: "grok" | "codex" | "kiro"; account: string | null }
 
 export type BackgroundCommand = {
   handle: string
@@ -108,14 +108,14 @@ export type BackgroundCommand = {
 
 export type Chosen = {
   id: string
-  provider: "grok" | "codex" | null
+  provider: "grok" | "codex" | "kiro" | null
   name: string | null
 }
 
 export type Model = {
   id: string
   name: string
-  provider?: "grok" | "codex"
+  provider?: "grok" | "codex" | "kiro"
   efforts?: string[]
   defaultEffort?: string
   fast?: { label: string; detail: string }
@@ -156,6 +156,7 @@ export type AppState = {
   sidebarCollapsed: boolean
   apiKey: string | null
   useCli: boolean
+  lang: string
   accounts: Account[]
   models: Model[]
   defaultModel: Chosen | null
@@ -210,6 +211,7 @@ function emptyState(): AppState {
     sidebarCollapsed: false,
     apiKey: process.env.AI_GATEWAY_API_KEY ?? null,
     useCli: false,
+    lang: "",
     accounts: [],
     models: [],
     defaultModel: null,
@@ -233,6 +235,7 @@ const PERSISTED = [
   "sidebarCollapsed",
   "apiKey",
   "useCli",
+  "lang",
   "models",
   "defaultModel",
 ] as const satisfies readonly (keyof AppState)[]
@@ -456,7 +459,7 @@ type StartsOn = Pick<
   "model" | "modelName" | "provider" | "effort" | "fast" | "mode"
 >
 
-export function answerable(current: AppState, provider: "grok" | "codex" | null): boolean {
+export function answerable(current: AppState, provider: "grok" | "codex" | "kiro" | null): boolean {
   return provider !== null || apiKeySource(current) !== "none"
 }
 
@@ -645,6 +648,10 @@ export function setDialog(dialog: Dialog | null): void {
 
 export function setPalette(open: boolean): void {
   setOverlay(open ? { kind: "palette" } : null)
+}
+
+export function setLang(lang: string): void {
+  setState((current) => ({ ...current, lang }))
 }
 
 export function setSettings(open: boolean): void {

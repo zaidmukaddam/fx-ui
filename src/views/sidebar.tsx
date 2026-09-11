@@ -2,6 +2,7 @@ import { useState } from "react"
 import os from "node:os"
 
 import { Icon } from "../ui/icons"
+import { useT, type Translate } from "../ui/i18n"
 import {
   color,
   radius,
@@ -39,7 +40,7 @@ function ago(at: number): string {
   return `${Math.floor(seconds / 86_400)}d`
 }
 
-function credentialStatus(current: AppState): {
+function credentialStatus(current: AppState, t: Translate): {
   label: string
   detail: string[]
   ready: boolean
@@ -52,34 +53,34 @@ function credentialStatus(current: AppState): {
     return {
       label: names.join(" · "),
       detail: [
-        `Signed in to ${names.join(" and ")}`,
+        t("status.signedInTo", { names: names.join(" and ") }),
         key === "none"
-          ? "Turns run on the subscription. Gateway models need a key as well."
-          : "Every model is available: the subscription's, and the Gateway's on your key.",
-        "Click for settings.",
+          ? t("status.subNeedsKey")
+          : t("status.everyModel"),
+        t("status.clickForSettings"),
       ],
       ready: true,
     }
   }
   if (key === "none") {
     return {
-      label: "No models",
+      label: t("status.noModels"),
       detail: [
-        "Nothing can answer a prompt yet",
-        "Add an AI Gateway key, or sign in to a Grok or Codex subscription.",
-        "Click for settings.",
+        t("status.nothingAnswers"),
+        t("status.addKeyOrSignIn"),
+        t("status.clickForSettings"),
       ],
       ready: false,
     }
   }
   return {
-    label: "AI Gateway",
+    label: t("status.gateway"),
     detail: [
-      "Connected through the AI Gateway",
+      t("status.connectedGateway"),
       key === "env"
-        ? "The key comes from AI_GATEWAY_API_KEY, which overrides any key saved here."
-        : "The key is saved in ~/.fx-ui/state.json, readable only by you.",
-      "Click for settings.",
+        ? t("status.keyFromEnv")
+        : t("status.keySaved"),
+      t("status.clickForSettings"),
     ],
     ready: true,
   }
@@ -96,6 +97,7 @@ function WorkspaceRow({
   active: boolean
   onSelect: () => void
 }) {
+  const t = useT()
   const [hovered, setHovered] = useState(false)
   return (
     <div
@@ -137,7 +139,7 @@ function WorkspaceRow({
           <IconButton
             icon="x"
             size={18}
-            tooltip="Remove workspace"
+            tooltip={t("sidebar.removeWorkspace")}
             testId={`remove-workspace-${workspace.id}`}
             onClick={() =>
               setDialog({ kind: "remove-workspace", workspaceId: workspace.id })
@@ -173,6 +175,7 @@ function SessionRow({
   splitOpen: boolean
   onOpen: () => void
 }) {
+  const t = useT()
   const [hovered, setHovered] = useState(false)
   const open = paneIndex >= 0
   const asking = session.messages.find(
@@ -243,7 +246,7 @@ function SessionRow({
         <IconButton
           icon="trash"
           size={18}
-          tooltip="Delete session"
+          tooltip={t("sidebar.deleteSession")}
           testId={`delete-session-${session.id}`}
           onClick={() => setDialog({ kind: "delete-session", sessionId: session.id })}
         />
@@ -284,10 +287,11 @@ function SessionRow({
 }
 
 export function Sidebar({ state }: { state: AppState }) {
+  const t = useT()
   const paneOf = (sessionId: string) =>
     state.panes.findIndex((pane) => pane.sessionId === sessionId)
   const splitOpen = state.panes.length > 1
-  const status = credentialStatus(state)
+  const status = credentialStatus(state, t)
 
   const newSession = (workspaceId: string) => startSession(workspaceId)
 
@@ -322,14 +326,14 @@ export function Sidebar({ state }: { state: AppState }) {
           <IconButton
             icon="search"
             size={24}
-            tooltip="Command palette  ⌘K"
+            tooltip={t("sidebar.commandPalette")}
             testId="open-palette"
             onClick={() => setPalette(true)}
           />
           <IconButton
             icon="plus"
             size={24}
-            tooltip="New session  ⌘N"
+            tooltip={t("sidebar.newSessionTip")}
             testId="new-session"
             onClick={() => {
               const workspaceId = state.activeWorkspaceId ?? state.workspaces[0]?.id
@@ -368,12 +372,12 @@ export function Sidebar({ state }: { state: AppState }) {
           }}
         >
           <Label grow size={text.micro} color={color.ghost}>
-            Workspaces
+            {t("sidebar.workspaces")}
           </Label>
           <IconButton
             icon="folderPlus"
             size={18}
-            tooltip="Add workspace  ⌘⇧O"
+            tooltip={t("sidebar.addWorkspaceTip")}
             testId="add-workspace"
             onClick={() => setDialog({ kind: "add-workspace", value: process.cwd(), error: null })}
           />
@@ -391,10 +395,10 @@ export function Sidebar({ state }: { state: AppState }) {
             }}
           >
             <Label size={text.small} color={color.ghost}>
-              No workspaces yet.
+              {t("sidebar.noWorkspaces")}
             </Label>
             <Button
-              label="Add a directory"
+              label={t("sidebar.addDirectory")}
               icon="folderPlus"
               size="sm"
               testId="sidebar-add-workspace"
@@ -459,7 +463,7 @@ export function Sidebar({ state }: { state: AppState }) {
                     <Icon name="plus" size={11} color={color.ghost} />
                   </div>
                   <Label size={text.small} color={color.ghost}>
-                    New session
+                    {t("sidebar.newSession")}
                   </Label>
                 </div>
               ) : null}
@@ -519,7 +523,7 @@ export function Sidebar({ state }: { state: AppState }) {
         <IconButton
           icon="settings"
           size={22}
-          tooltip="Settings  ⌘,"
+          tooltip={t("sidebar.settingsTip")}
           testId="open-settings"
           active={state.settingsOpen}
           onClick={() => setSettings(!state.settingsOpen)}

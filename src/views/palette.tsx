@@ -7,6 +7,7 @@ import {
 } from "@gpuix/react/combobox"
 
 import { Icon, type IconName } from "../ui/icons"
+import { useT, type Translate } from "../ui/i18n"
 import { color, nativeTheme, radius, space, text } from "../ui/theme"
 import { Backdrop, Kbd, Label, fieldStyle, overlayStyle } from "../ui/ui"
 import { cancel, reloadSkills } from "../agent/agent"
@@ -40,7 +41,7 @@ type Command = {
   run: () => void
 }
 
-function buildCommands(state: AppState): Command[] {
+function buildCommands(state: AppState, t: Translate): Command[] {
   const commands: Command[] = []
   const workspaceId = state.activeWorkspaceId ?? state.workspaces[0]?.id ?? null
   const focused = state.panes[state.focusedPane]?.sessionId ?? null
@@ -49,7 +50,7 @@ function buildCommands(state: AppState): Command[] {
   if (workspaceId) {
     commands.push({
       id: "new-session",
-      label: "New session",
+      label: t("cmd.newSession"),
       icon: "plus",
       hint: "⌘N",
       run: () => startSession(workspaceId),
@@ -57,21 +58,21 @@ function buildCommands(state: AppState): Command[] {
   }
   commands.push({
     id: "add-workspace",
-    label: "Add workspace",
+    label: t("cmd.addWorkspace"),
     icon: "folderPlus",
     hint: "⌘⇧O",
     run: () => setDialog({ kind: "add-workspace", value: process.cwd(), error: null }),
   })
   commands.push({
     id: "toggle-split",
-    label: split ? "Close split view" : "Open split view",
+    label: split ? t("cmd.closeSplit") : t("cmd.openSplit"),
     icon: "columns",
     hint: "⌘\\",
     run: () => setSplit(!split),
   })
   commands.push({
     id: "toggle-sidebar",
-    label: state.sidebarCollapsed ? "Show sidebar" : "Hide sidebar",
+    label: state.sidebarCollapsed ? t("cmd.showSidebar") : t("cmd.hideSidebar"),
     icon: "panelLeft",
     hint: "⌘B",
     run: () =>
@@ -83,7 +84,7 @@ function buildCommands(state: AppState): Command[] {
   if (focused && findSession(state, focused)?.status === "running") {
     commands.push({
       id: "stop-turn",
-      label: "Stop the running turn",
+      label: t("cmd.stopTurn"),
       icon: "square",
       hint: "⌘.",
       run: () => cancel(focused),
@@ -92,8 +93,8 @@ function buildCommands(state: AppState): Command[] {
   if (focused) {
     commands.push({
       id: "reload-skills",
-      label: "Reload skills and MCP servers",
-      detail: "Re-reads them from disk; open sessions keep their history",
+      label: t("cmd.reloadSkills"),
+      detail: t("cmd.reloadSkills.detail"),
       icon: "sparkle",
       run: () => void reloadSkills(),
     })
@@ -104,8 +105,8 @@ function buildCommands(state: AppState): Command[] {
   ) {
     commands.push({
       id: "clear-notices",
-      label: "Clear notices",
-      detail: "Takes the app's own messages off this transcript",
+      label: t("cmd.clearNotices"),
+      detail: t("cmd.clearNotices.detail"),
       icon: "x",
       run: () => clearNotices(focused),
     })
@@ -114,8 +115,8 @@ function buildCommands(state: AppState): Command[] {
   if (focused && undoable) {
     commands.push({
       id: "undo-edit",
-      label: `Undo the edit to ${undoable}`,
-      detail: "Puts the file back as it was, if nothing has changed it since",
+      label: t("cmd.undoEdit", { file: undoable }),
+      detail: t("cmd.undoEdit.detail"),
       icon: "history",
       run: () => {
         try {
@@ -128,25 +129,25 @@ function buildCommands(state: AppState): Command[] {
   }
   commands.push({
     id: "settings",
-    label: "Settings",
-    detail: "Keys, sign-ins, runtime, skills and MCP",
+    label: t("cmd.settings"),
+    detail: t("cmd.settings.detail"),
     icon: "settings",
     hint: "⌘,",
     run: () => setSettings(true),
   })
   commands.push({
     id: "fx-sign-in",
-    label: "Sign in with the fx CLI",
-    detail: "The binary's own sign-in, for a provider this app does not carry",
+    label: t("cmd.fxSignIn"),
+    detail: t("cmd.fxSignIn.detail"),
     icon: "terminal",
     run: () => void signInWithFx(),
   })
   commands.push({
     id: "use-cli",
-    label: state.useCli ? "Run in this process instead" : "Run through the fx CLI",
+    label: state.useCli ? t("cmd.runInProcess") : t("cmd.runCli"),
     detail: state.useCli
-      ? "Back to the embedded agent, on the AI Gateway key"
-      : "Uses whichever provider you signed in to",
+      ? t("cmd.runInProcess.detail")
+      : t("cmd.runCli.detail"),
     icon: "terminal",
     run: () => void setUseCli(!state.useCli),
   })
@@ -154,7 +155,7 @@ function buildCommands(state: AppState): Command[] {
   for (const workspace of state.workspaces) {
     commands.push({
       id: `workspace:${workspace.id}`,
-      label: `Go to ${workspace.name}`,
+      label: t("cmd.goTo", { name: workspace.name }),
       detail: workspace.path,
       icon: "folder",
       run: () =>
@@ -175,7 +176,7 @@ function buildCommands(state: AppState): Command[] {
     const session = findSession(state, focused)
     commands.push({
       id: "rename-session",
-      label: "Rename this session",
+      label: t("cmd.renameSession"),
       icon: "filePen",
       run: () =>
         setDialog({ kind: "rename-session", sessionId: focused, value: session?.title ?? "" }),
@@ -183,14 +184,14 @@ function buildCommands(state: AppState): Command[] {
     if (session && session.grants.length > 0) {
       commands.push({
         id: "forget-grants",
-        label: "Forget what this session may do without asking",
+        label: t("cmd.forgetGrants"),
         icon: "shieldAlert",
         run: () => forgetGrants(focused),
       })
     }
     commands.push({
       id: "delete-session",
-      label: "Delete this session",
+      label: t("cmd.deleteSession"),
       icon: "trash",
       run: () => setDialog({ kind: "delete-session", sessionId: focused }),
     })
@@ -213,8 +214,9 @@ function rank(commands: Command[], query: string): Command[] {
 }
 
 export function CommandPalette({ state }: { state: AppState }) {
+  const t = useT()
   const [query, setQuery] = useState("")
-  const commands = buildCommands(state)
+  const commands = buildCommands(state, t)
   const results = rank(commands, query)
   const byId = new Map(results.map((command) => [command.id, command]))
 
@@ -259,7 +261,7 @@ export function CommandPalette({ state }: { state: AppState }) {
             <Icon name="search" size={14} color={color.faint} />
             <div style={fieldStyle(text.body).box}>
               <ComboboxInput
-                placeholder="Search commands, workspaces, and sessions"
+                placeholder={t("palette.search")}
                 theme={nativeTheme}
                 style={fieldStyle(text.body).text}
               />
@@ -324,7 +326,7 @@ export function CommandPalette({ state }: { state: AppState }) {
               }}
             >
               <Label size={text.body} color={color.faint}>
-                {`No command matches "${query}"`}
+                {t("palette.noMatch", { query })}
               </Label>
             </div>
           ) : null}

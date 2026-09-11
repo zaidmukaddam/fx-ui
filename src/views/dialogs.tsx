@@ -1,6 +1,7 @@
 import path from "node:path"
 
 import { Icon } from "../ui/icons"
+import { useT } from "../ui/i18n"
 import { color, space, text } from "../ui/theme"
 import { Backdrop, Button, Label, Paragraph, TextField, overlayStyle } from "../ui/ui"
 import { isDirectory } from "../tools"
@@ -85,6 +86,7 @@ function Actions({ children }: { children: React.ReactNode }) {
 }
 
 export function Dialogs({ state }: { state: AppState }) {
+  const t = useT()
   const dialog = state.overlay
   if (!dialog || dialog.kind === "palette") return null
   const close = () => setDialog(null)
@@ -93,11 +95,11 @@ export function Dialogs({ state }: { state: AppState }) {
     const submit = () => {
       const candidate = path.resolve(dialog.value.trim().replace(/^~/, process.env.HOME ?? "~"))
       if (!isDirectory(candidate)) {
-        setDialog({ ...dialog, error: "That path is not a directory on this machine." })
+        setDialog({ ...dialog, error: t("dialog.addWorkspace.notDir") })
         return
       }
       if (state.workspaces.some((workspace) => workspace.path === candidate)) {
-        setDialog({ ...dialog, error: "That directory is already a workspace." })
+        setDialog({ ...dialog, error: t("dialog.addWorkspace.exists") })
         return
       }
       close()
@@ -106,8 +108,8 @@ export function Dialogs({ state }: { state: AppState }) {
     }
     return (
       <DialogShell
-        title="Add a workspace"
-        description="The agent can read, edit, and run commands inside this directory and nowhere else."
+        title={t("dialog.addWorkspace.title")}
+        description={t("dialog.addWorkspace.desc")}
         onClose={close}
       >
         <TextField
@@ -119,9 +121,9 @@ export function Dialogs({ state }: { state: AppState }) {
         />
         {dialog.error ? <ErrorLine message={dialog.error} /> : null}
         <Actions>
-          <Button label="Cancel" variant="ghost" onClick={close} />
+          <Button label={t("btn.cancel")} variant="ghost" onClick={close} />
           <Button
-            label="Add workspace"
+            label={t("btn.addWorkspace")}
             variant="primary"
             testId="confirm-add-workspace"
             onClick={submit}
@@ -140,21 +142,21 @@ export function Dialogs({ state }: { state: AppState }) {
     }
     return (
       <DialogShell
-        title="Rename this session"
-        description="The name shows in the sidebar, the palette, and the pane header."
+        title={t("dialog.renameSession.title")}
+        description={t("dialog.renameSession.desc")}
         onClose={close}
       >
         <TextField
           testId="session-title"
           value={dialog.value}
-          placeholder="What this session is about"
+          placeholder={t("dialog.renameSession.placeholder")}
           onChange={(value) => setDialog({ ...dialog, value })}
           onSubmit={submit}
         />
         <Actions>
-          <Button label="Cancel" variant="ghost" onClick={close} />
+          <Button label={t("btn.cancel")} variant="ghost" onClick={close} />
           <Button
-            label="Rename"
+            label={t("btn.rename")}
             variant="primary"
             testId="confirm-rename-session"
             onClick={submit}
@@ -169,14 +171,16 @@ export function Dialogs({ state }: { state: AppState }) {
     const session = findSession(state, dialog.sessionId)
     return (
       <DialogShell
-        title="Delete this session?"
-        description={`"${session?.title ?? "This session"}" and its saved history are removed. The files it changed are not touched.`}
+        title={t("dialog.deleteSession.title")}
+        description={t("dialog.deleteSession.desc", {
+          title: session?.title ?? t("dialog.deleteSession.fallback"),
+        })}
         onClose={close}
       >
         <Actions>
-          <Button label="Cancel" variant="ghost" onClick={close} />
+          <Button label={t("btn.cancel")} variant="ghost" onClick={close} />
           <Button
-            label="Delete session"
+            label={t("btn.deleteSession")}
             variant="danger"
             testId="confirm-delete-session"
             onClick={() => {
@@ -195,14 +199,17 @@ export function Dialogs({ state }: { state: AppState }) {
   ).length
   return (
     <DialogShell
-      title="Remove this workspace?"
-      description={`"${workspace?.name ?? "This workspace"}" and its ${count} session${count === 1 ? "" : "s"} are removed from fx. The directory on disk is not touched.`}
+      title={t("dialog.removeWorkspace.title")}
+      description={t("dialog.removeWorkspace.desc", {
+        name: workspace?.name ?? t("dialog.removeWorkspace.fallback"),
+        count,
+      })}
       onClose={close}
     >
       <Actions>
-        <Button label="Cancel" variant="ghost" onClick={close} />
+        <Button label={t("btn.cancel")} variant="ghost" onClick={close} />
         <Button
-          label="Remove workspace"
+          label={t("btn.removeWorkspace")}
           variant="danger"
           testId="confirm-remove-workspace"
           onClick={() => {

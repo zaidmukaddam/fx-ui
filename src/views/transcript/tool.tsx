@@ -3,6 +3,7 @@ import { useContext, useState } from "react"
 import { Icon, type IconName } from "../../ui/icons"
 import { color, nativeTheme, radius, space, text } from "../../ui/theme"
 import { Label } from "../../ui/ui"
+import { useT, type Translate } from "../../ui/i18n"
 import { type Message } from "../../store"
 import { COLLAPSED_LINES, GUTTER, Gutter, HoldTail, Row } from "./shared"
 
@@ -37,17 +38,17 @@ function duration(from: number, to: number | undefined): string {
   return seconds < 1 ? `${Math.round(seconds * 1000)}ms` : `${seconds.toFixed(1)}s`
 }
 
-function outcome(message: Extract<Message, { kind: "tool" }>): {
+function outcome(message: Extract<Message, { kind: "tool" }>, t: Translate): {
   label: string
   tone: string
 } {
   switch (message.state) {
     case "running":
-      return { label: "running", tone: color.faint }
+      return { label: t("tool.running"), tone: color.faint }
     case "denied":
-      return { label: "denied", tone: color.tertiary }
+      return { label: t("tool.denied"), tone: color.tertiary }
     case "error":
-      return { label: "error", tone: color.danger }
+      return { label: t("tool.error"), tone: color.danger }
     default:
       return { label: duration(message.at, message.endedAt), tone: color.ghost }
   }
@@ -58,6 +59,7 @@ export function ToolResult({
 }: {
   message: Extract<Message, { kind: "tool" }>
 }) {
+  const t = useT()
   const [expanded, setExpanded] = useState(false)
   const [full, setFull] = useState(false)
   const holdTail = useContext(HoldTail)
@@ -78,7 +80,7 @@ export function ToolResult({
       : message.state === "denied"
         ? color.tertiary
         : color.secondary
-  const result = outcome(message)
+  const result = outcome(message, t)
 
   return (
     <Row>
@@ -174,7 +176,7 @@ export function ToolResult({
               }}
             >
               <Label size={text.micro} color={color.tertiary}>
-                {`Show ${hidden.toLocaleString()} more line${hidden === 1 ? "" : "s"}`}
+                {t("tool.showMore", { count: hidden.toLocaleString(), plural: hidden === 1 ? "" : "s" })}
               </Label>
             </div>
           ) : null}

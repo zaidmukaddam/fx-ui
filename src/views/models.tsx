@@ -13,6 +13,7 @@ import { Icon } from "../ui/icons"
 import { color, nativeTheme, radius, space, text } from "../ui/theme"
 import { Label, fieldStyle, overlayStyle } from "../ui/ui"
 import { loadModels } from "../agent/credentials"
+import { useT } from "../ui/i18n"
 import { answerable, useApp, type Chosen, type Model } from "../store"
 import { rank } from "./composer/shared"
 
@@ -37,10 +38,10 @@ function hintFor(model: Model | undefined): string {
 }
 
 export function chosenFrom(key: string, models: Model[]): Chosen {
-  const match = /^(grok|codex):(.+)$/.exec(key)
+  const match = /^(grok|codex|kiro):(.+)$/.exec(key)
   return {
     id: match ? match[2]! : key,
-    provider: match ? (match[1] as "grok" | "codex") : null,
+    provider: match ? (match[1] as "grok" | "codex" | "kiro") : null,
     name: models.find((model) => modelKey(model) === key)?.name ?? null,
   }
 }
@@ -63,6 +64,7 @@ export function ModelChoice({
   onChange: (chosen: Chosen | null) => void
 }) {
   const [query, setQuery] = useState("")
+  const t = useT()
   const state = useApp()
   const models = state.models.filter((model) => answerable(state, model.provider ?? null))
 
@@ -147,7 +149,7 @@ export function ModelChoice({
           <Icon name="search" size={12} color={color.ghost} />
           <div style={fieldStyle(text.small).box}>
             <ComboboxInput
-              placeholder="Search models"
+              placeholder={t("modelPicker.search")}
               theme={nativeTheme}
               style={fieldStyle(text.small).text}
             />
@@ -187,7 +189,7 @@ export function ModelChoice({
                 return (
                   <>
                     <Label truncate size={text.small} color={color.text}>
-                      {item === AUTOMATIC ? "Automatic" : (byKey.get(item)?.name ?? item)}
+                      {item === AUTOMATIC ? t("modelPicker.automatic") : (byKey.get(item)?.name ?? item)}
                     </Label>
                     {hint ? (
                       <Label grow truncate size={text.micro} color={color.ghost}>
@@ -210,7 +212,7 @@ export function ModelChoice({
           style={{ display: "flex", alignItems: "center", height: 28, paddingLeft: space.md }}
         >
           <Label size={text.small} color={color.ghost}>
-            No model matches
+            {t("modelPicker.noMatch")}
           </Label>
         </ComboboxEmpty>
       </ComboboxContent>

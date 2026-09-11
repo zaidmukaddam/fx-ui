@@ -4,6 +4,7 @@ import { Icon } from "../../ui/icons"
 import { color, FONT, nativeTheme, radius, space, text } from "../../ui/theme"
 import { Button, Label } from "../../ui/ui"
 import { resolveApproval, resolveQuestion } from "../../tools"
+import { useT } from "../../ui/i18n"
 import { type Message } from "../../store"
 import { Card, COLLAPSED_LINES, SummaryRow } from "./shared"
 
@@ -14,13 +15,14 @@ export function Question({
   sessionId: string
   message: Extract<Message, { kind: "question" }>
 }) {
+  const t = useT()
   const [draft, setDraft] = useState("")
 
   if (message.answer !== null) {
     return (
       <SummaryRow icon="message" size={12}>
         <Label truncate size={text.small} color={color.tertiary}>
-          {message.answer ? `${message.question} → ${message.answer}` : `Dismissed · ${message.question}`}
+          {message.answer ? `${message.question} → ${message.answer}` : t("block.dismissed", { question: message.question })}
         </Label>
       </SummaryRow>
     )
@@ -56,7 +58,7 @@ export function Question({
             />
           ))}
           <Button
-            label="Dismiss"
+            label={t("block.dismiss")}
             variant="ghost"
             size="sm"
             testId={`dismiss-${message.questionId}`}
@@ -83,7 +85,7 @@ export function Question({
             <textarea
               testId={`answer-${message.questionId}`}
               value={draft}
-              placeholder="Your answer"
+              placeholder={t("block.yourAnswer")}
               minRows={1}
               maxRows={4}
               theme={nativeTheme}
@@ -102,7 +104,7 @@ export function Question({
             />
           </div>
           <Button
-            label="Answer"
+            label={t("block.answer")}
             variant="primary"
             size="sm"
             disabled={!draft.trim()}
@@ -122,12 +124,13 @@ export function Approval({
   sessionId: string
   message: Extract<Message, { kind: "approval" }>
 }) {
+  const t = useT()
   if (message.decision !== "pending") {
     if (message.decision !== "granted") return null
     return (
       <SummaryRow icon="check">
         <Label size={text.small} color={color.ghost}>
-          {`Won't ask again · ${message.title}`}
+          {t("block.wontAskAgain", { title: message.title })}
         </Label>
       </SummaryRow>
     )
@@ -176,21 +179,21 @@ export function Approval({
         }}
       >
         <Button
-          label="Yes"
+          label={t("block.yes")}
           variant="primary"
           size="sm"
           testId={`approve-${message.approvalId}`}
           onClick={() => resolveApproval(sessionId, message.approvalId, "allowed")}
         />
         <Button
-          label="Yes, and don't ask again"
+          label={t("block.yesGrant")}
           size="sm"
           testId={`grant-${message.approvalId}`}
           onClick={() => resolveApproval(sessionId, message.approvalId, "granted")}
         />
         <div style={{ flexGrow: 1 }} />
         <Button
-          label="No"
+          label={t("block.no")}
           variant="danger"
           size="sm"
           testId={`deny-${message.approvalId}`}
