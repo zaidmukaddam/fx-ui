@@ -492,6 +492,23 @@ function ProviderRow({
   )
 }
 
+function KiroRow({ account }: { account: Account | undefined }) {
+  return (
+    <Row
+      title="Kiro"
+      detail={
+        account
+          ? "Using your Kiro IDE / Kiro CLI login on this machine. Its models are in the picker."
+          : "No Kiro login found on this machine. Sign in with Kiro IDE or Kiro CLI, then reopen settings."
+      }
+    >
+      <Label size={text.small} color={account ? color.tertiary : color.ghost}>
+        {account ? "Detected" : "Not found"}
+      </Label>
+    </Row>
+  )
+}
+
 function UpdateRow({ update }: { update: UpdateStatus }) {
   return (
     <Row
@@ -593,6 +610,7 @@ export function Settings({ state }: { state: AppState }) {
             onChanged={changed}
           />
         ))}
+        <KiroRow account={state.accounts.find((entry) => entry.provider === "kiro")} />
         <Row
           title="New sessions start on"
           detail={

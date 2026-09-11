@@ -79,7 +79,7 @@ export type Session = {
   updatedAt: number
   model: string | null
   modelName: string | null
-  provider: "grok" | "codex" | null
+  provider: "grok" | "codex" | "kiro" | null
   effort: string | null
   fast: boolean
   mode: PermissionMode
@@ -98,7 +98,7 @@ export type Workspace = {
 
 export type Pane = { sessionId: string | null }
 
-export type Account = { provider: "grok" | "codex"; account: string | null }
+export type Account = { provider: "grok" | "codex" | "kiro"; account: string | null }
 
 export type BackgroundCommand = {
   handle: string
@@ -108,14 +108,14 @@ export type BackgroundCommand = {
 
 export type Chosen = {
   id: string
-  provider: "grok" | "codex" | null
+  provider: "grok" | "codex" | "kiro" | null
   name: string | null
 }
 
 export type Model = {
   id: string
   name: string
-  provider?: "grok" | "codex"
+  provider?: "grok" | "codex" | "kiro"
   efforts?: string[]
   defaultEffort?: string
   fast?: { label: string; detail: string }
@@ -456,7 +456,7 @@ type StartsOn = Pick<
   "model" | "modelName" | "provider" | "effort" | "fast" | "mode"
 >
 
-export function answerable(current: AppState, provider: "grok" | "codex" | null): boolean {
+export function answerable(current: AppState, provider: "grok" | "codex" | "kiro" | null): boolean {
   return provider !== null || apiKeySource(current) !== "none"
 }
 

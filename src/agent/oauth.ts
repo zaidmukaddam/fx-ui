@@ -3,10 +3,18 @@ import path from "node:path"
 import { dedupe, jsonStore, loopbackCallback, pkce, postForm, postJson } from "../oauth-core"
 import { capture } from "../workspace/run"
 import { DIR } from "../store"
+import { hasKiroCredentials } from "./kiro-auth"
 
-export type ProviderId = "grok" | "codex"
+export type ProviderId = "grok" | "codex" | "kiro"
 
-type ProviderSpec = {
+// "oauth" providers (Grok, Codex) sign in through a browser PKCE flow and
+// speak the OpenAI Responses API. "native" providers (Kiro) reuse the
+// machine's existing IDE/CLI credentials and speak their own wire format, so
+// the OAuth-only fields do not apply to them. A discriminated union keeps the
+// OAuth fields required where they exist and absent where they do not.
+
+type OAuthSpec = {
+  kind: "oauth"
   label: string
   clientId: string
   authorizeUrl: string
@@ -29,8 +37,32 @@ type ProviderSpec = {
   searchTools: string[]
 }
 
+type NativeSpec = {
+  kind: "native"
+  label: string
+  searchTools: string[]
+}
+
+type ProviderSpec = OAuthSpec | NativeSpec
+
+/** True when a provider signs in through the browser OAuth flow. */
+export function isOAuthProvider(provider: ProviderId): boolean {
+  return PROVIDERS[provider].kind === "oauth"
+}
+
+/**
+ * The OAuth spec for a provider known to be OAuth. Only ever called on the
+ * grok/codex code paths; throws if misused, which would be a programming error.
+ */
+export function oauthSpec(provider: ProviderId): OAuthSpec {
+  const spec = PROVIDERS[provider]
+  if (spec.kind !== "oauth") throw new Error(`${provider} is not an OAuth provider`)
+  return spec
+}
+
 export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
   grok: {
+    kind: "oauth",
     label: "Grok",
     clientId: "b1a00492-073a-47ea-816f-4c329264a828",
     authorizeUrl: "https://auth.x.ai/oauth2/authorize",
@@ -53,6 +85,7 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     searchTools: ["web_search", "x_search"],
   },
   codex: {
+    kind: "oauth",
     label: "Codex",
     clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
     authorizeUrl: "https://auth.openai.com/oauth/authorize",
@@ -77,6 +110,15 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     staticHeaders: {},
     searchTools: ["web_search"],
   },
+  kiro: {
+    kind: "native",
+    label: "Kiro",
+    // Kiro reuses the machine's existing Kiro IDE / Kiro CLI login; it has no
+    // browser OAuth flow, no Responses endpoint and no gateway catalogue here.
+    // Its credentials, model list and wire format live in ./kiro-auth.ts and
+    // the kiro branch of the provider fetch shim in ./providers.ts.
+    searchTools: [],
+  },
 }
 
 export type Session = {
@@ -98,7 +140,10 @@ export function storedSession(provider: ProviderId): Session | null {
 
 export function signedIn(): ProviderId[] {
   const current = store.read()
-  return (Object.keys(PROVIDERS) as ProviderId[]).filter((id) => current[id])
+  const oauth = (Object.keys(PROVIDERS) as ProviderId[]).filter(
+    (id) => isOAuthProvider(id) && current[id],
+  )
+  return hasKiroCredentials() ? [...oauth, "kiro"] : oauth
 }
 
 export function signOut(provider: ProviderId): void {
@@ -168,7 +213,7 @@ export function authorizeUrl(
   challenge: string,
   state: string,
 ): string {
-  const spec = PROVIDERS[provider]
+  const spec = oauthSpec(provider)
   const url = new URL(spec.authorizeUrl)
   url.search = new URLSearchParams({
     response_type: "code",
@@ -184,7 +229,7 @@ export function authorizeUrl(
 }
 
 export async function beginSignIn(provider: ProviderId): Promise<PendingSignIn> {
-  const spec = PROVIDERS[provider]
+  const spec = oauthSpec(provider)
   const { verifier, challenge, state } = pkce()
 
   const listener = await loopbackCallback(spec)
@@ -255,7 +300,7 @@ export async function credential(
   const refreshToken = session.refreshToken
 
   return dedupeRefresh(provider, async () => {
-    const spec = PROVIDERS[provider]
+    const spec = oauthSpec(provider)
     const form = {
       grant_type: "refresh_token",
       refresh_token: refreshToken,

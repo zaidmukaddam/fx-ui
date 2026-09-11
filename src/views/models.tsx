@@ -37,10 +37,10 @@ function hintFor(model: Model | undefined): string {
 }
 
 export function chosenFrom(key: string, models: Model[]): Chosen {
-  const match = /^(grok|codex):(.+)$/.exec(key)
+  const match = /^(grok|codex|kiro):(.+)$/.exec(key)
   return {
     id: match ? match[2]! : key,
-    provider: match ? (match[1] as "grok" | "codex") : null,
+    provider: match ? (match[1] as "grok" | "codex" | "kiro") : null,
     name: models.find((model) => modelKey(model) === key)?.name ?? null,
   }
 }
