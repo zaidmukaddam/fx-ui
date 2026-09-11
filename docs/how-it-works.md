@@ -205,7 +205,22 @@ workspace beats the same name at home, and `.fx` beats both.
 Settings adds one from a single line: an `https://…` URL for a remote server,
 or the command line that starts a local one. Removing it there takes it out of
 the running sessions as well. Either way it lands in `~/.fx-ui/mcp.json`, which
-stays hand-editable and keeps whatever else you have in it.
+stays hand-editable and keeps whatever else you have in it. Each connection
+gets a stable `id` when you add or import it; older files without one keep
+using the display name as the id. Workspace paths in `workspaceConnections`
+pick which connections that folder uses. A missing entry means every
+connection. An empty list means none. Parent folders are not searched or
+merged. Nothing is read from the repo.
+
+Ignore here in Settings writes that list for the open workspace. Disable still
+pauses a connection everywhere. Tokens and OAuth stay in `~/.fx-ui`; a
+workspace file that only names connection ids is a later step, and automatic
+`.mcp.json` discovery is not in this version.
+
+A remote server's tools ask before they run. Changing a connection's URL or
+command issues a new approval scope, so an old "always allow" does not follow
+the new endpoint. Env and headers are not part of that check, so rotating a
+token in the file does not revoke the grant.
 
 Import in the MCP settings row finds global configs from Cursor
 (`~/.cursor/mcp.json`), Devin (`~/.config/devin/mcp_config.json`, or the older
@@ -249,7 +264,8 @@ catalog is larger than the SDK default. The agent still has at most 64 host
 tool slots: it discovers MCP tools with `capability_search`, reads a schema
 with `mcp_select_tool`, then passes the exact name and arguments to
 `mcp_call_tool`. Server tools stay in the shared MCP pool instead of occupying
-individual agent slots. Calls retain the same per-server approval scope.
+individual agent slots. Calls retain a per-connection approval scope tied to
+that id and endpoint.
 
 ### Images
 
@@ -472,7 +488,7 @@ src/workspace/       the machine a workspace sits on
   skills.ts          skills from .fx, .claude and .agents
   mcp/               connected MCP servers
     index.ts         config to connected tools, and the pool that shares them
-    config.ts        ~/.fx-ui/mcp.json: a command, or a url
+    config.ts        ~/.fx-ui/mcp.json: connections, ids, workspace bindings
     stdio.ts         a server this app spawns
     http.ts          a server it reaches over Streamable HTTP
     auth.ts          the MCP authorization flow, and the tokens it stores

@@ -12,6 +12,7 @@ import { Icon } from "../../ui/icons"
 import { color, radius, space, text } from "../../ui/theme"
 import { Button, Explain, Label, overlayStyle } from "../../ui/ui"
 import { forgetGrants, stopBackgroundCommand } from "../../tools"
+import { mcpGrantLabel } from "../../workspace/mcp"
 import { attachImages, chooseImages, pasteImage } from "../../workspace/images"
 import {
   DEFAULT_MODEL,
@@ -404,10 +405,10 @@ function grantLabel(scope: string): string {
   if (scope === "write") return "Edit and create files"
   if (scope === "install_skill") return "Install skills"
   if (scope === "web:search") return "Search the web"
-  const [, kind, target] = /^(cmd|web|mcp):(.+)$/.exec(scope) ?? []
+  if (scope.startsWith("mcp:")) return mcpGrantLabel(scope)
+  const [, kind, target] = /^(cmd|web):(.+)$/.exec(scope) ?? []
   if (kind === "cmd") return `Run ${target}`
   if (kind === "web") return `Fetch from ${target}`
-  if (kind === "mcp") return `Use ${target} tools`
   return scope
 }
 

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import path from "node:path"
 
-import { HOME_DIR } from "../../store"
+import { HOME_DIR, newId } from "../../store"
 import { MCP_CONFIG_FILE, isRemote, readMcpConfig, readMcpDocument, writeMcpDocument, type ServerConfig } from "./config"
 
 export type McpImportEntry = {
@@ -207,7 +207,7 @@ export function importMcpServers(entries: McpImportEntry[], file = MCP_CONFIG_FI
       skipped.push(entry.name)
       continue
     }
-    raw[entry.name] = entry.config
+    raw[entry.name] = { id: newId(), ...entry.config }
     known[entry.name] = entry.config
     imported.push(entry.name)
   }

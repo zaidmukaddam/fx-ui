@@ -5,7 +5,7 @@ import { getState, HOME_DIR, setState, useApp } from "../store"
 import { useMountEffect } from "../ui/hooks"
 import { color, space, text } from "../ui/theme"
 import { Button, Label, Paragraph } from "../ui/ui"
-import { signOutOfServer } from "../workspace/mcp"
+import { pruneMcpGrants, signOutOfServer } from "../workspace/mcp"
 import { isRemote } from "../workspace/mcp/config"
 import { discoverMcpImports, importMcpServers, sameMcpImport, type McpImportEntry, type McpImportSource } from "../workspace/mcp/import"
 
@@ -34,12 +34,11 @@ export function McpImport({ onClose, onChanged }: { onClose: () => void; onChang
     try {
       const imported = importMcpServers(selected)
       for (const name of imported.imported) signOutOfServer(name)
-      const scopes = new Set(imported.imported.map((name) => `mcp:${name}`))
       setState((current) => ({
         ...current,
         sessions: current.sessions.map((session) => ({
           ...session,
-          grants: session.grants.filter((grant) => !scopes.has(grant)),
+          grants: pruneMcpGrants(session.grants),
         })),
       }))
       setResult(`Imported ${imported.imported.length} server${imported.imported.length === 1 ? "" : "s"}.${imported.skipped.length ? ` Skipped ${imported.skipped.length} already configured or unavailable.` : ""}`)

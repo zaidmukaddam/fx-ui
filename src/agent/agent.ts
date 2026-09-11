@@ -40,7 +40,7 @@ import { imageBlock, mentionBlocks } from "../workspace/files"
 import { type ProviderId } from "./oauth"
 import { refreshGitStatus } from "../workspace/git"
 import { loadSkills, splitCommand, type SkillCommand } from "../workspace/skills"
-import { acquireMcp, resetMcp, type McpLease } from "../workspace/mcp"
+import { acquireMcp, MCP_CONFIG_FILE, pruneMcpGrants, resetMcp, type McpLease } from "../workspace/mcp"
 import { beginTurn, endTurn, forgetTurn } from "../workspace/turns"
 
 type Runtime = {
@@ -251,7 +251,8 @@ async function runtimeFor(sessionId: string): Promise<Runtime> {
   }
   if (existing) await disposeRuntime(sessionId, existing, { checkpoint: true })
 
-  const [skills, mcp] = await Promise.all([loadSkills(workspace.path), acquireMcp()])
+  updateSession(sessionId, (current) => ({ ...current, grants: pruneMcpGrants(current.grants) }))
+  const [skills, mcp] = await Promise.all([loadSkills(workspace.path), acquireMcp(MCP_CONFIG_FILE, workspace.path)])
   for (const problem of [
     ...skills.problems.map((entry) => `Skill ${path.basename(entry.file)}: ${entry.reason}`),
     ...mcp.problems.map((entry) => `MCP server ${entry.server}: ${entry.reason}`),
@@ -568,7 +569,7 @@ export async function reloadSkills(): Promise<void> {
   const workspace = findWorkspace(state, findSession(state, focused)?.workspaceId ?? null)
   if (!focused || !workspace) return
 
-  const [skills, mcp] = await Promise.all([loadSkills(workspace.path), acquireMcp()])
+  const [skills, mcp] = await Promise.all([loadSkills(workspace.path), acquireMcp(MCP_CONFIG_FILE, workspace.path)])
   const borrowed = skills.commands.length - skills.names.length
   const found = [
     skills.names.length > 0 ? `skills: ${skills.names.join(", ")}` : "",
