@@ -1,5 +1,5 @@
 import { $ } from "bun"
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
 const root = path.join(import.meta.dir, "..")
@@ -10,6 +10,13 @@ const contents = path.join(app, "Contents")
 const icon = path.join(root, "assets", "app-icon.png")
 const identity = process.env.SIGN_IDENTITY ?? "-"
 const entitlements = path.join(import.meta.dir, "entitlements.plist")
+
+function logicalSize(file: string): number {
+  const stat = lstatSync(file)
+  return stat.isDirectory()
+    ? readdirSync(file).reduce((total, entry) => total + logicalSize(path.join(file, entry)), 0)
+    : stat.size
+}
 
 const notary = process.env.NOTARY_PROFILE
   ? ["--keychain-profile", process.env.NOTARY_PROFILE]
@@ -75,7 +82,9 @@ mkdirSync(stage)
 await $`ditto ${app} ${path.join(stage, "fx.app")}`
 symlinkSync("/Applications", path.join(stage, "Applications"))
 rmSync(dmg, { force: true })
-await $`hdiutil create -volname fx -srcfolder ${stage} -ov -format UDZO ${dmg}`.quiet()
+const imageMiB = Math.ceil(logicalSize(stage) * 1.25 / (1024 * 1024)) + 32
+console.log(`[package] creating a ${imageMiB} MiB disk image`)
+await $`hdiutil create -size ${`${imageMiB}m`} -fs HFS+ -volname fx -srcfolder ${stage} -ov -format UDZO ${dmg}`.quiet()
 rmSync(stage, { recursive: true })
 if (identity !== "-") await $`codesign --force --sign ${identity} --timestamp ${dmg}`.quiet()
 
