@@ -255,12 +255,15 @@ is never thrown away. The last twenty writes of a session are remembered.
 ### Restore this turn
 
 In a git workspace whose directory is the repository root, a turn snapshots the
-worktree through a temporary index, so staged files are not added, and snapshots
-the real index without writing to it. `⌘K` → *Restore this turn's files* puts
-both back if nothing has changed since the turn ended. Files the turn created
+worktree through a temporary index seeded with tracked files, so ignore rules
+cannot hide tracked content and the user's staging is preserved. It also records
+the real index. `⌘K` → *Restore this turn's files* puts both back if nothing has
+changed since the turn ended. Files the turn created
 are removed. A directory that is not a repository, or is only a subdirectory of
-one, stays on per-file undo. Restore does not uncommit, does not see gitignored
-files, and is remembered only for this session, like undo.
+one, stays on per-file undo. Git restores file/directory transitions through the
+temporary index before the original staging is restored. Ignored untracked files
+are not snapshotted; restore refuses if they overlap a path being restored.
+Restore does not uncommit and is remembered only for this session, like undo.
 
 ### Project instructions
 

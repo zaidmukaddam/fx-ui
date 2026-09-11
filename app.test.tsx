@@ -746,6 +746,76 @@ describe("git", () => {
     expect(lastTurn(session.id)).toBeNull()
   })
 
+  it("preserves tracked files when a turn changes their ignore rules", async () => {
+    const root = repo()
+    writeFileSync(path.join(root, ".gitignore"), "kept.txt\nignored.txt\n")
+    writeFileSync(path.join(root, "kept.txt"), "user changes before the turn\n")
+    writeFileSync(path.join(root, "ignored.txt"), "leave this alone\n")
+    execFileSync("git", ["add", ".gitignore"], { cwd: root, stdio: "ignore" })
+    const cached = await gitDiff(root, { staged: true })
+    const session = createSession(createWorkspace(root, "demo").id)
+
+    await beginTurn(session.id, root)
+    writeFileSync(path.join(root, ".gitignore"), "ignored.txt\n")
+    await endTurn(session.id, root)
+    await restoreTurn(session.id)
+
+    expect(readFileSync(path.join(root, "kept.txt"), "utf8")).toBe("user changes before the turn\n")
+    expect(readFileSync(path.join(root, ".gitignore"), "utf8")).toBe("kept.txt\nignored.txt\n")
+    expect(readFileSync(path.join(root, "ignored.txt"), "utf8")).toBe("leave this alone\n")
+    expect(await gitDiff(root, { staged: true })).toBe(cached)
+  })
+
+  it.each(["file to directory", "directory to file"])(
+    "restores staged path changes from %s",
+    async (direction) => {
+      const root = repo()
+      const before = direction === "file to directory" ? "target" : "target/child"
+      const after = direction === "file to directory" ? "target/child" : "target"
+      mkdirSync(path.dirname(path.join(root, before)), { recursive: true })
+      writeFileSync(path.join(root, before), "staged before\n")
+      execFileSync("git", ["add", "target"], { cwd: root, stdio: "ignore" })
+      writeFileSync(path.join(root, before), "unstaged before\n")
+      const cached = await gitDiff(root, { staged: true })
+      const work = await gitDiff(root)
+      const session = createSession(createWorkspace(root, "demo").id)
+
+      await beginTurn(session.id, root)
+      rmSync(path.join(root, "target"), { recursive: true })
+      mkdirSync(path.dirname(path.join(root, after)), { recursive: true })
+      writeFileSync(path.join(root, after), "during the turn\n")
+      execFileSync("git", ["add", "-A"], { cwd: root, stdio: "ignore" })
+      await endTurn(session.id, root)
+      await restoreTurn(session.id)
+
+      expect(readFileSync(path.join(root, before), "utf8")).toBe("unstaged before\n")
+      expect(await gitDiff(root, { staged: true })).toBe(cached)
+      expect(await gitDiff(root)).toBe(work)
+      expect(lastTurn(session.id)).toBeNull()
+    },
+  )
+
+  it("refuses to overwrite an ignored file blocking a restored path", async () => {
+    const root = repo()
+    writeFileSync(path.join(root, ".gitignore"), "private.txt\n")
+    execFileSync("git", ["add", ".gitignore"], { cwd: root, stdio: "ignore" })
+    const session = createSession(createWorkspace(root, "demo").id)
+    await beginTurn(session.id, root)
+    rmSync(path.join(root, "kept.txt"))
+    mkdirSync(path.join(root, "kept.txt"))
+    writeFileSync(path.join(root, "kept.txt", "child.txt"), "during the turn\n")
+    execFileSync("git", ["add", "-A"], { cwd: root, stdio: "ignore" })
+    await endTurn(session.id, root)
+    writeFileSync(path.join(root, "kept.txt", "private.txt"), "new private content\n")
+    const cached = await gitDiff(root, { staged: true })
+
+    await expect(restoreTurn(session.id)).rejects.toThrow(/Untracked or ignored files overlap/)
+
+    expect(readFileSync(path.join(root, "kept.txt", "private.txt"), "utf8")).toBe("new private content\n")
+    expect(readFileSync(path.join(root, "kept.txt", "child.txt"), "utf8")).toBe("during the turn\n")
+    expect(await gitDiff(root, { staged: true })).toBe(cached)
+  })
+
   it("refuses to restore once the workspace has moved on", async () => {
     const root = repo()
     const workspace = createWorkspace(root, path.basename(root))
