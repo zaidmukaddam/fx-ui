@@ -14,6 +14,7 @@ import { KiroEventParser, parseKiroStream } from "../src/agent/kiro-stream"
 import { kiroEventsToGatewaySse } from "../src/agent/kiro-sse"
 import { KiroAuthManager } from "../src/agent/kiro-auth"
 import { runtimeModelId } from "../src/agent/kiro-model-id"
+import { describeImageKiro } from "../src/agent/kiro-runtime"
 
 async function sseFrames(stream: ReadableStream<Uint8Array>): Promise<Record<string, unknown>[]> {
   const reader = stream.getReader()
@@ -172,6 +173,31 @@ describe("kiro subscription port", () => {
     expect(runtimeModelId("auto-kiro")).toBe("auto")
     expect(runtimeModelId("claude-sonnet-4-5")).toBe("claude-sonnet-4.5")
     expect(runtimeModelId("claude-sonnet-4.5")).toBe("claude-sonnet-4.5")
+  })
+
+  it("loads the image request region and profile before sending", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fx-ui-kiro-image-"))
+    const file = join(dir, "kiro-auth-token.json")
+    const profileArn = "arn:aws:codewhisperer:eu-central-1:1:profile/test"
+    writeFileSync(file, JSON.stringify({
+      accessToken: "image-token",
+      expiresAt: "2099-01-01T00:00:00Z",
+      region: "eu-central-1",
+      profileArn,
+    }))
+    const auth = new KiroAuthManager({ credentialsFile: file, writeBack: false })
+    let request: { url: string; init?: RequestInit } | undefined
+    const base = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      request = { url: String(input), init }
+      return new Response('{"content":"An image."}')
+    }) as typeof fetch
+    const signal = new AbortController().signal
+
+    expect(await describeImageKiro(auth, "auto-kiro", "Describe", "image/png", "aW1hZ2U=", signal, base))
+      .toBe("An image.")
+    expect(request?.url).toBe("https://runtime.eu-central-1.kiro.dev/generateAssistantResponse")
+    expect(JSON.parse(String(request?.init?.body)).profileArn).toBe(profileArn)
+    expect(request?.init?.signal).toBe(signal)
   })
 
   it("refreshes desktop credentials and writes the rotated token back", async () => {

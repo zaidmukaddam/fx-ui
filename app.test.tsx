@@ -20,6 +20,7 @@ import { createTestRoot, hasNativeTestRenderer } from "@gpuix/react/testing"
 import { FxApp } from "./app"
 import { cleanTitle, fallbackTitle, reloadSkills, send } from "./src/agent/agent"
 import { loadModels, refreshCredentials } from "./src/agent/credentials"
+import { KiroAuthManager } from "./src/agent/kiro-auth"
 import { COMPOSER_CARD_INSET } from "./src/views/composer"
 import { gitDiff, gitLog, gitStatus, isClean, summarise } from "./src/workspace/git"
 import { loadSkills, splitCommand } from "./src/workspace/skills"
@@ -565,6 +566,38 @@ describe("new tools", () => {
     await expect(run(tools.vision, { path: "notes.txt" })).rejects.toThrow(
       /not an image this can read/,
     )
+  })
+
+  it("reads images through the Kiro vision tool using its loaded credential", async () => {
+    const { root, session, tools } = seed("full-access")
+    writeFileSync(path.join(root, "image.png"), Buffer.from(ONE_PIXEL_PNG, "base64"))
+    const model = { id: "claude-sonnet-4.5", name: "Sonnet · Kiro", provider: "kiro" as const, vision: true }
+    setState((current) => ({ ...current, apiKey: null, models: [model] }))
+    updateSession(session.id, (current) => ({ ...current, provider: "kiro", model: model.id }))
+    const token = vi.spyOn(KiroAuthManager.prototype, "getAccessToken").mockResolvedValue("kiro-token")
+    const realFetch = globalThis.fetch
+    let request: { url: string; init?: RequestInit } | undefined
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      request = { url: String((input as Request)?.url ?? input), init }
+      return new Response('{"content":"A small green square."}')
+    }) as unknown as typeof fetch
+
+    try {
+      expect(await run(tools.vision, { path: "image.png", question: "What is shown?" }))
+        .toBe("A small green square.")
+      expect(token).toHaveBeenCalledOnce()
+      expect(request?.url).toBe("https://runtime.us-east-1.kiro.dev/generateAssistantResponse")
+      expect(new Headers(request?.init?.headers).get("authorization")).toBe("Bearer kiro-token")
+      expect(JSON.parse(String(request?.init?.body)).conversationState.currentMessage.userInputMessage)
+        .toMatchObject({
+          content: "What is shown?",
+          modelId: "claude-sonnet-4.5",
+          images: [{ format: "png", source: { bytes: ONE_PIXEL_PNG } }],
+        })
+    } finally {
+      token.mockRestore()
+      globalThis.fetch = realFetch
+    }
   })
 
   it("parks the turn on a question until it is answered", async () => {

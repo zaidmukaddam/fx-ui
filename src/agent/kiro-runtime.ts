@@ -190,6 +190,7 @@ export async function describeImageKiro(
   const format = IMAGE_FORMAT_BY_MEDIA_TYPE[mediaType]
   if (!format) throw new Error(`Kiro cannot read ${mediaType} images.`)
 
+  const token = await auth.getAccessToken()
   const payload: Json = {
     conversationState: {
       chatTriggerType: "MANUAL",
@@ -207,7 +208,6 @@ export async function describeImageKiro(
   }
 
   const endpoint = `${auth.apiHost}/generateAssistantResponse`
-  const token = await auth.getAccessToken()
   let response = await base(endpoint, {
     method: "POST",
     headers: kiroHeaders(auth, token),

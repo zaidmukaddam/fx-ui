@@ -1,6 +1,6 @@
 import { credential, isOAuthProvider, oauthSpec, PROVIDERS, type ProviderId } from "./oauth"
 import { kiroAuth } from "./kiro-auth"
-import { kiroLanguageModel, listKiroModels } from "./kiro-runtime"
+import { describeImageKiro, kiroLanguageModel, listKiroModels } from "./kiro-runtime"
 import { dataOf, sseEvents, toResponsesRequest, translateStream, type Json } from "./responses"
 
 export const GATEWAY_LANGUAGE_MODEL_URL =
@@ -334,6 +334,12 @@ export async function describeImage(
   signal?: AbortSignal,
   base: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<string> {
+  if (provider === "kiro") {
+    const image = /^data:([^;,]+);base64,([\s\S]+)$/.exec(dataUrl)
+    if (!image) throw new Error("Kiro needs a base64-encoded image.")
+    return describeImageKiro(kiroAuth(), bareModel(model), prompt, image[1]!, image[2]!, signal, base)
+  }
+
   const auth = await credential(provider)
   if (!auth) throw new Error(`Not signed in to ${PROVIDERS[provider].label}.`)
 

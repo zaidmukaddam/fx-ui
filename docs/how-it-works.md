@@ -223,8 +223,10 @@ keeps it when the original moves.
 libfx cannot carry an image in a prompt at all. Its SDK rejects image prompt
 blocks outright, and a tool result's images are dropped before they leave the
 core. So an image is handed over as a path with an instruction to look at it,
-and `vision` reads it on the session's own credential. `vision` reaches the
-attachments folder and nothing else outside the workspace.
+and `vision` reads it on the session's own credential. Kiro image requests use
+the native Kiro endpoint, with the account's region and profile loaded before
+the request is built. `vision` reaches the attachments folder and nothing else
+outside the workspace.
 
 ### Background commands
 
