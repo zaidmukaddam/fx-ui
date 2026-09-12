@@ -1,7 +1,17 @@
 import { createFxAgent, type Agent } from "libfx"
 
 import { backing } from "../agent/backing"
-import { findSession, getState, patchMessage, type SubagentStep } from "../store"
+import {
+  answerable,
+  findSession,
+  getState,
+  patchMessage,
+  sessionModel,
+  type AppState,
+  type Model,
+  type Session,
+  type SubagentStep,
+} from "../store"
 import { askUserQuestion } from "./approvals"
 import {
   DENIED_PREFIX,
@@ -18,6 +28,90 @@ import {
 } from "./kit"
 
 const MAX_SUBAGENT_DEPTH = 1
+
+function usableModels(state: AppState): Model[] {
+  return state.models.filter((model) => answerable(state, model.provider ?? null))
+}
+
+function exactModel(model: Model, want: string): boolean {
+  const needle = want.toLowerCase()
+  return model.id.toLowerCase() === needle || model.name.toLowerCase() === needle
+}
+
+function looseModel(model: Model, want: string): boolean {
+  const needle = want.toLowerCase()
+  const id = model.id.toLowerCase()
+  return id.replace(/^[a-z0-9-]+\//, "") === needle || id.endsWith(`/${needle}`)
+}
+
+export function matchSubagentModel(state: AppState, want: string): Model {
+  const needle = want.trim()
+  if (!needle) throw new Error("Give a model id or name from this session's picker.")
+  const usable = usableModels(state)
+  // An exact id or name wins, so a subscription's "grok-4.6" is not shadowed by
+  // the Gateway's "xai/grok-4.6"; a bare or suffix match is the fallback.
+  const exact = usable.filter((model) => exactModel(model, needle))
+  const matches = exact.length > 0 ? exact : usable.filter((model) => looseModel(model, needle))
+  if (matches.length === 1) return matches[0]!
+  if (matches.length > 1) {
+    throw new Error(`Several models match ${needle}. Use a full id from the picker.`)
+  }
+  const listed = usable
+    .slice(0, 8)
+    .map((model) => model.name)
+    .join(", ")
+  throw new Error(
+    `No model named ${needle} is available here.${listed ? ` Available: ${listed}.` : ""}`,
+  )
+}
+
+export function childSessionFor(
+  parent: Session,
+  options: { model?: string; effort?: string } = {},
+): Session {
+  const state = getState()
+  let next: Session = { ...parent, fast: false }
+  let spec = sessionModel(state, next)
+
+  if (options.model) {
+    const want = options.model.trim()
+    const inherited =
+      (parent.model && parent.model.toLowerCase() === want.toLowerCase()) ||
+      (parent.modelName && parent.modelName.toLowerCase() === want.toLowerCase())
+    if (!inherited) {
+      spec = matchSubagentModel(state, want)
+      next = {
+        ...next,
+        model: spec.id,
+        modelName: spec.name,
+        provider: spec.provider ?? null,
+      }
+    }
+  }
+
+  spec = sessionModel(state, next) ?? spec
+  if (options.effort) {
+    const allowed = spec?.efforts ?? []
+    if (allowed.length > 0 && !allowed.includes(options.effort)) {
+      throw new Error(
+        `${spec?.name ?? "This model"} does not take effort ${options.effort}. Use ${allowed.join(", ")}.`,
+      )
+    }
+    next = { ...next, effort: options.effort }
+  } else if (spec?.efforts?.length) {
+    const current = next.effort
+    if (!current || !spec.efforts.includes(current)) {
+      next = {
+        ...next,
+        effort: spec.defaultEffort ?? spec.efforts[Math.floor(spec.efforts.length / 2)] ?? null,
+      }
+    }
+  } else if (spec && (!spec.efforts || spec.efforts.length === 0)) {
+    next = { ...next, effort: null }
+  }
+
+  return next
+}
 
 export function agentTools(
   context: ToolContext,
@@ -90,11 +184,11 @@ export function agentTools(
     ...((context.depth ?? 0) >= MAX_SUBAGENT_DEPTH
       ? []
       : [
-          defineTool<{ task: string; instructions?: string }>(
+          defineTool<{ task: string; instructions?: string; model?: string; effort?: string }>(
             {
               name: "subagent",
               description:
-                "Delegate a self-contained task to a second agent with the same workspace tools, and get back only its final answer. Use it for work whose intermediate steps you do not need, like a wide search or a survey of many files, so their output does not fill this conversation.",
+                "Delegate a self-contained task to a second agent with the same workspace tools, and get back only its final answer. Use it for work whose intermediate steps you do not need, like a wide search or a survey of many files, so their output does not fill this conversation. You may set model and effort so the child uses a different one than this conversation, for example a faster model to implement after you have planned.",
               inputSchema: {
                 type: "object",
                 properties: {
@@ -106,19 +200,40 @@ export function agentTools(
                     type: "string",
                     description: "Extra direction on how to work or what to report.",
                   },
+                  model: {
+                    type: "string",
+                    description:
+                      "Optional model id or name from this session's picker. Omit to use the same model as this conversation.",
+                  },
+                  effort: {
+                    type: "string",
+                    description:
+                      "Optional reasoning effort for that model. Omit to inherit, or to use that model's default when it does not support the parent's effort.",
+                  },
                 },
                 required: ["task"],
               },
               parse: (input) => ({
                 task: requireString(input, "task"),
                 instructions: optionalString(input, "instructions") || undefined,
+                model: optionalString(input, "model") || undefined,
+                effort: optionalString(input, "effort") || undefined,
               }),
-              label: (input) => input.task,
+              // The last segment is the status: the activity card drops it and
+              // shows the state itself, keeping the task and any chosen model.
+              label: (input) =>
+                input.model || input.effort
+                  ? [input.task, input.model, input.effort, "running"].filter(Boolean).join(" · ")
+                  : input.task,
               run: async (input, ctx) => {
-                const back = backing(
-                  findSession(getState(), ctx.sessionId),
-                  searchRows(ctx.sessionId),
-                )
+                const parent = findSession(getState(), ctx.sessionId)
+                if (!parent) {
+                  throw new Error(
+                    "A subagent runs on the same credential as this session, and it has none.",
+                  )
+                }
+                const child = childSessionFor(parent, { model: input.model, effort: input.effort })
+                const back = backing(child, searchRows(ctx.sessionId))
                 if (!back) {
                   throw new Error(
                     "A subagent runs on the same credential as this session, and it has none.",
@@ -159,13 +274,18 @@ export function agentTools(
                     if (event.type === "text_delta") answer += event.delta
                   }
                   const result = await turn.result
+                  const chosen =
+                    input.model || input.effort
+                      ? [child.modelName ?? child.model, child.effort].filter(Boolean)
+                      : []
+                  const labelled = (status: string) => [input.task, ...chosen, status].join(" · ")
                   if (!answer.trim()) {
                     return {
                       text: `The subagent finished with no answer (${result.stopReason}).`,
-                      label: `${input.task} · ${result.stopReason}`,
+                      label: labelled(result.stopReason),
                     }
                   }
-                  return { text: answer, label: `${input.task} · done` }
+                  return { text: answer, label: labelled("done") }
                 } finally {
                   await agent.close()
                 }

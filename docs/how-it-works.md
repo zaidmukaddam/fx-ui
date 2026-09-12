@@ -357,8 +357,13 @@ The set fx documents at
 | Interaction | `ask_user_question`, `read_tool_result` | none |
 | Git | `git_status`, `git_diff`, `git_log` | none, they only read |
 
-`subagent` and `vision` run on whatever credential the session runs on. Every
-model whose catalogue reports an `image` input modality can read one, which is
+`subagent` and `vision` run on whatever credential the session runs on. A child
+may take its own `model` and `effort`; omit them and it inherits the parent's.
+The child cannot use a login the parent does not have. Nested children are
+still disallowed. The parent waits for the child's answer. Named children and
+notes sent while a child is working are not in this version.
+
+Every model whose catalogue reports an `image` input modality can read one, which is
 both providers' whole line except Codex Spark. So `vision` sends the image as an
 `input_image` part on the subscription, and falls back to the Gateway only when
 the session has no provider or its model takes text alone.
