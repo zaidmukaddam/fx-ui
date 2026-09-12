@@ -15,15 +15,29 @@ import { resolveInside } from "./paths"
 
 const COMMAND_TIMEOUT_MS = 120_000
 const MAX_PENDING_CHARS = 200_000
+const MAX_LOG_CHARS = 40_000
+const PUBLISHED_LOG_CHARS = 6_000
+const PUBLISH_EVERY_MS = 500
+
+const URL_PATTERN =
+  /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:\/[^\s"'<>)\]]*)?/gi
+const MAX_URLS = 4
+const URL_CONTEXT_CHARS = 256
 
 type Running = {
   command: string
   child: ChildProcessWithoutNullStreams
   pending: string
+  log: string
+  startedAt: number
+  endedAt: number | null
   exit: number | null
+  urls: string[]
+  urlTail: string
 }
 
 const running = new Map<string, Running>()
+const flushing = new Set<string>()
 
 function end(child: ChildProcessWithoutNullStreams): void {
   if (child.pid) {
@@ -35,13 +49,47 @@ function end(child: ChildProcessWithoutNullStreams): void {
   child.kill()
 }
 
+function collectUrls(process: Running, chunk: string): void {
+  if (process.urls.length < MAX_URLS) {
+    const scanned = `${process.urlTail}${chunk}`
+    URL_PATTERN.lastIndex = 0
+    for (const match of scanned.matchAll(URL_PATTERN)) {
+      // A match touching the end may be cut off mid-chunk; the tail rescans it next time.
+      if (match.index + match[0].length === scanned.length) continue
+      const normalized = match[0].replace(/^https?:\/\/(?:0\.0\.0\.0|\[::1\])/, (head) =>
+        head.replace(/0\.0\.0\.0|\[::1\]/, "localhost"),
+      )
+      if (!process.urls.includes(normalized)) process.urls.push(normalized)
+      if (process.urls.length >= MAX_URLS) break
+    }
+  }
+  process.urlTail = chunk.slice(-URL_CONTEXT_CHARS)
+}
+
 function publish(sessionId: string): void {
   const live: BackgroundCommand[] = []
   for (const [handle, process] of running) {
     if (!handle.startsWith(`${sessionId}:`)) continue
-    live.push({ handle, command: process.command, exit: process.exit })
+    live.push({
+      handle,
+      command: process.command,
+      exit: process.exit,
+      startedAt: process.startedAt,
+      endedAt: process.endedAt,
+      log: process.log.slice(-PUBLISHED_LOG_CHARS),
+      urls: [...process.urls],
+    })
   }
   setBackground(sessionId, live)
+}
+
+function publishSoon(sessionId: string): void {
+  if (flushing.has(sessionId)) return
+  flushing.add(sessionId)
+  setTimeout(() => {
+    flushing.delete(sessionId)
+    publish(sessionId)
+  }, PUBLISH_EVERY_MS)
 }
 
 function sessionOf(handle: string): string {
@@ -67,18 +115,35 @@ function startBackground(
     detached: true,
   }) as ChildProcessWithoutNullStreams
 
-  const process: Running = { command, child, pending: "", exit: null }
+  const process: Running = {
+    command,
+    child,
+    pending: "",
+    log: "",
+    startedAt: Date.now(),
+    endedAt: null,
+    exit: null,
+    urls: [],
+    urlTail: "",
+  }
   const collect = (chunk: Buffer) => {
-    process.pending = `${process.pending}${chunk.toString()}`.slice(-MAX_PENDING_CHARS)
+    const text = chunk.toString()
+    process.pending = `${process.pending}${text}`.slice(-MAX_PENDING_CHARS)
+    process.log = `${process.log}${text}`.slice(-MAX_LOG_CHARS)
+    collectUrls(process, text)
+    publishSoon(sessionId)
   }
   child.stdout.on("data", collect)
   child.stderr.on("data", collect)
   child.on("error", (error) => {
     process.pending += `\n${error.message}\n`
+    process.log += `\n${error.message}\n`
     process.exit = -1
+    process.endedAt ??= Date.now()
   })
   child.on("close", (code) => {
     process.exit = code ?? 0
+    process.endedAt ??= Date.now()
     publish(sessionId)
   })
 

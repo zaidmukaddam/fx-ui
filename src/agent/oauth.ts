@@ -1,8 +1,10 @@
 import path from "node:path"
 
 import { dedupe, jsonStore, loopbackCallback, pkce, postForm, postJson } from "../oauth-core"
-import { capture } from "../workspace/run"
+import { openExternally } from "../workspace/open"
 import { DIR } from "../store"
+
+export { openExternally }
 
 export type ProviderId = "grok" | "codex"
 
@@ -142,15 +144,6 @@ function sessionFromTokenResponse(body: Record<string, unknown>, previous?: Sess
     expiresAt: Date.now() + expiresIn * 1000,
     accountId: identity.accountId ?? previous?.accountId ?? null,
     account: identity.account ?? previous?.account ?? null,
-  }
-}
-
-export async function openExternally(url: string): Promise<void> {
-  const opener =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open"
-  try {
-    await capture(opener, [url], { timeoutMs: 10_000 })
-  } catch {
   }
 }
 

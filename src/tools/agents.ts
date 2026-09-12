@@ -1,7 +1,7 @@
 import { createFxAgent, type Agent } from "libfx"
 
 import { backing } from "../agent/backing"
-import { findSession, getState } from "../store"
+import { findSession, getState, patchMessage, type SubagentStep } from "../store"
 import { askUserQuestion } from "./approvals"
 import {
   DENIED_PREFIX,
@@ -125,6 +125,10 @@ export function agentTools(
                   )
                 }
 
+                const steps = new Map<string, SubagentStep>()
+                const publishSteps = () =>
+                  patchMessage(ctx.sessionId, ctx.messageId, { steps: [...steps.values()] })
+
                 const agent = (await createFxAgent({
                   ...back.options,
                   instructions: [
@@ -141,6 +145,10 @@ export function agentTools(
                     ...ctx,
                     depth: (ctx.depth ?? 0) + 1,
                     search: back.search,
+                    onStep: (step) => {
+                      steps.set(step.id, step)
+                      publishSteps()
+                    },
                   }),
                 })) as Agent
 

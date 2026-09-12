@@ -37,6 +37,7 @@ import {
   type Account,
   type AppState,
   type UpdateStatus,
+  type UsageRecord,
 } from "../store"
 import { ModelChoice, keyOf } from "./models"
 import { McpImport } from "./mcp-import"
@@ -605,6 +606,171 @@ function UpdateRow({ update }: { update: UpdateStatus }) {
   )
 }
 
+const COMPACT = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+})
+
+const USAGE_RANGES = [
+  { value: "24h", label: "24h", ms: 86_400_000 },
+  { value: "7d", label: "7d", ms: 7 * 86_400_000 },
+  { value: "30d", label: "30d", ms: 30 * 86_400_000 },
+] as const
+
+type UsageRange = (typeof USAGE_RANGES)[number]["value"]
+
+function tokensOf(record: UsageRecord): number {
+  return record.input + record.output + record.cached + record.reasoning
+}
+
+/** The local calendar day as YYYY-MM-DD, which sorts in date order. */
+function dayKey(at: number): string {
+  const day = new Date(at)
+  const pad = (value: number) => String(value).padStart(2, "0")
+  return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`
+}
+
+function dayLabel(at: number): string {
+  const day = new Date(at)
+  const today = new Date()
+  const yesterday = new Date(today.getTime() - 86_400_000)
+  if (day.toDateString() === today.toDateString()) return "Today"
+  if (day.toDateString() === yesterday.toDateString()) return "Yesterday"
+  return day.toLocaleDateString("en", { month: "short", day: "numeric" })
+}
+
+function UsageRow({ label, tokens, detail }: { label: string; tokens: number; detail?: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        gap: space.lg,
+        paddingTop: space.sm,
+        paddingBottom: space.sm,
+        paddingLeft: space.lg,
+        paddingRight: space.lg,
+        minWidth: 0,
+      }}
+    >
+      <Label grow truncate size={text.small} color={color.tertiary}>
+        {label}
+      </Label>
+      {detail ? (
+        <Label truncate size={text.micro} color={color.ghost}>
+          {detail}
+        </Label>
+      ) : null}
+      <Label size={text.small} color={color.text}>
+        {COMPACT.format(tokens)}
+      </Label>
+    </div>
+  )
+}
+
+function UsageGroup({ title }: { title: string }) {
+  return (
+    <div style={{ paddingTop: space.xs, paddingLeft: space.lg }}>
+      <Label size={text.micro} color={color.ghost}>
+        {title.toUpperCase()}
+      </Label>
+    </div>
+  )
+}
+
+function UsageSection({ state }: { state: AppState }) {
+  const [range, setRange] = useState<UsageRange>("24h")
+  const cutoff = Date.now() - USAGE_RANGES.find((entry) => entry.value === range)!.ms
+  const records = state.usage.filter((record) => record.at >= cutoff)
+
+  const group = (key: (record: UsageRecord) => string, label: (record: UsageRecord) => string) => {
+    const rows = new Map<string, { id: string; label: string; tokens: number }>()
+    for (const record of records) {
+      const id = key(record)
+      const row = rows.get(id) ?? { id, label: label(record), tokens: 0 }
+      row.tokens += tokensOf(record)
+      rows.set(id, row)
+    }
+    return [...rows.values()].sort((a, b) => b.tokens - a.tokens)
+  }
+
+  const byDay = group(
+    (record) => dayKey(record.at),
+    (record) => dayLabel(record.at),
+  ).sort((a, b) => b.id.localeCompare(a.id))
+  const byModel = group(
+    (record) => record.model ?? "unknown",
+    (record) => record.modelName ?? record.model ?? "Unknown model",
+  )
+  const bySession = group(
+    (record) => record.sessionId,
+    (record) => record.sessionTitle,
+  )
+
+  const total = records.reduce((sum, record) => sum + tokensOf(record), 0)
+  const input = records.reduce((sum, record) => sum + record.input, 0)
+  const output = records.reduce((sum, record) => sum + record.output, 0)
+  const cached = records.reduce((sum, record) => sum + record.cached, 0)
+
+  return (
+    <Section title="Usage">
+      <Row
+        title="Tokens per turn"
+        detail="Counted locally as turns finish. Plan limits live in the context meter, not here."
+      >
+        <div style={{ display: "flex", flexDirection: "row", gap: space.xs }}>
+          {USAGE_RANGES.map((entry) => (
+            <Button
+              key={entry.value}
+              label={entry.label}
+              size="sm"
+              variant={range === entry.value ? "secondary" : "ghost"}
+              testId={`usage-range-${entry.value}`}
+              onClick={() => setRange(entry.value)}
+            />
+          ))}
+        </div>
+      </Row>
+      {records.length === 0 ? (
+        <Row title="Nothing yet" detail={`No turns in the last ${range}.`} />
+      ) : (
+        <>
+          <UsageRow
+            label={`${records.length} turn${records.length === 1 ? "" : "s"}`}
+            tokens={total}
+            detail={`in ${COMPACT.format(input)} · out ${COMPACT.format(output)}${cached > 0 ? ` · cached ${COMPACT.format(cached)}` : ""}`}
+          />
+          {byDay.length > 1 ? (
+            <>
+              <UsageGroup title="By day" />
+              {byDay.slice(0, 10).map((row) => (
+                <UsageRow key={row.id} label={row.label} tokens={row.tokens} />
+              ))}
+            </>
+          ) : null}
+          {byModel.length > 0 ? (
+            <>
+              <UsageGroup title="By model" />
+              {byModel.slice(0, 5).map((row) => (
+                <UsageRow key={row.id} label={row.label} tokens={row.tokens} />
+              ))}
+            </>
+          ) : null}
+          {bySession.length > 1 ? (
+            <>
+              <UsageGroup title="By session" />
+              {bySession.slice(0, 5).map((row) => (
+                <UsageRow key={row.id} label={row.label} tokens={row.tokens} />
+              ))}
+            </>
+          ) : null}
+        </>
+      )}
+    </Section>
+  )
+}
+
 export function Settings({ state }: { state: AppState }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [importing, setImporting] = useState(false)
@@ -714,6 +880,8 @@ export function Settings({ state }: { state: AppState }) {
           </Label>
         </Row>
       </Section>
+
+      <UsageSection state={state} />
 
       <Section title="Extensions">
         <Row

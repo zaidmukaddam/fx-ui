@@ -229,6 +229,35 @@ above and closes with an ordinary gap instead of doubling the centre. A
 symmetric band would pay for the space above the row a second time underneath,
 where there are no lights to clear.
 
+### A focused `<textarea>` never reports arrow keys, and always inserts a tab
+
+Probed directly: with a `<textarea>` focused, `onKeyDown` fires for `tab` and
+`escape` and nothing else — `ArrowUp`/`ArrowDown` are swallowed by the native
+text widget for line-to-line cursor movement before any JS sees them. Even the
+window-level `onKeyDown` sees nothing. A plain `<input>` forwards all of them,
+but the composer needs multi-line text, so the mention and `/` pickers navigate
+with `⌃N`/`⌃P` (readline's own answer to the same problem) and keep `up`/`down`
+in the handler for any future caller that can actually receive them.
+
+`tab` is worse than silent: it reaches the handler, but the native default
+still inserts a literal tab character afterwards whatever the handler does, so
+the draft comes back as `draft + "\t"`. Picking on Tab therefore happens in
+`onDraftChange`, where that corrupted value shows up, not in `onKeyDown`.
+
+### A subagent's tool calls must not become transcript rows
+
+`defineTool` adds a row to the session for every call, and a subagent's tools
+carry the same `sessionId`, so each of its `read_file`/`grep_files` calls
+appeared in the main transcript beside the subagent's own card. The card then
+had nothing of its own to show but a name count.
+
+Tools at `depth > 0` now never write a row. The `subagent` tool passes an
+`onStep` callback down to them instead, and each call reports its real label
+and output there, which the card renders as a nested transcript — a step per
+call, expandable, the same information a top-level row would carry. Sessions
+saved before this hold `steps` as bare tool names; `load()` drops those rather
+than handing the card a shape it cannot render.
+
 ## libfx
 
 ### The embedded core is built for the Gateway only
@@ -386,6 +415,24 @@ unless the request carries `x-grok-client-version`, read from
 responses endpoint does, so a sign-in and a model list can both look healthy
 while every turn fails.
 
+### Grok's rate-limit headers never move, so its plan usage is not in them
+
+Every Grok response carries `x-ratelimit-limit-requests` / `-remaining-requests`
+and the same pair for tokens, which reads like a usage surface. Measured across
+several completed turns: `remaining` stays equal to `limit` (8300/8300,
+53M/53M), so `1 - remaining / limit` is always 0 and the meter reported "0%
+used" no matter how much had been spent. Those headers describe the API tier's
+per-minute budget, not the subscription.
+
+The subscription's real allowance comes from the proxy's own billing route,
+`GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`, with the same
+bearer token and client-version header. Its `config.creditUsagePercent` and
+`config.currentPeriod.{start,end}` are the weekly percentage and reset that
+Grok Build's own `/usage` shows; `/v1/billing` without `format=credits` answers
+a monthly dollar allowance instead, all zeros on a subscription with none.
+Nothing about this route is a documented API, so it is read defensively and a
+missing or reshaped field just leaves the panel empty.
+
 ### Both providers run web search themselves, and fx never asks them to
 
 Codex reports `supports_search_tool` with a `web_search_tool_type`, Grok reports
@@ -485,6 +532,27 @@ their own process group (`detached: true`) and are stopped as a group, whether
 from the composer, the agent, a deleted session, or the app's exit, which stops
 every one. A crash or `kill -9` still leaves them running, since nothing is left
 to stop them.
+
+### A command's log is scanned for URLs as it arrives, not on every publish
+
+`http://localhost:5173/` and friends are found in a background command's output
+so the drawer can offer them as links. Scanning the whole retained log (up to
+40,000 characters) on every 500ms publish re-ran the same regex over the same
+bytes for as long as the process lived. Each chunk is now scanned once as it
+arrives, keeping a little of the previous chunk so a URL split across two
+`data` events is still found. At most four URLs are kept.
+
+## git
+
+### The porcelain v2 field offsets are positional
+
+`gitStatus` reads `--porcelain=v2 -z` output and takes the path from fixed
+space-separated field counts, per `git-status(1)`: eight fields before the path
+on a `1` line, nine on a `2` (which then carries the original path in the next
+NUL-separated field), ten on a `u` line. A field git adds before the path in a
+future version would shift every one of these silently. `--numstat -z` has the
+same shape for renames: an empty path field means the old and new paths are the
+two fields that follow.
 
 ## Hot reload
 

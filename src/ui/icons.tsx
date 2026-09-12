@@ -11,6 +11,7 @@ import iconCommand from "../../assets/icons/command.svg" with { type: "text" }
 import iconCopy from "../../assets/icons/copy.svg" with { type: "text" }
 import iconDownload from "../../assets/icons/download.svg" with { type: "text" }
 import iconEllipsis from "../../assets/icons/ellipsis.svg" with { type: "text" }
+import iconExternalLink from "../../assets/icons/external-link.svg" with { type: "text" }
 import iconFileDiff from "../../assets/icons/file-diff.svg" with { type: "text" }
 import iconFilePen from "../../assets/icons/file-pen-line.svg" with { type: "text" }
 import iconFileSearch from "../../assets/icons/file-search.svg" with { type: "text" }
@@ -30,6 +31,7 @@ import iconPanelLeft from "../../assets/icons/panel-left.svg" with { type: "text
 import iconPanelRightClose from "../../assets/icons/panel-right-close.svg" with { type: "text" }
 import iconPlug from "../../assets/icons/plug.svg" with { type: "text" }
 import iconPlus from "../../assets/icons/plus.svg" with { type: "text" }
+import iconRefreshCw from "../../assets/icons/refresh-cw.svg" with { type: "text" }
 import iconScrollText from "../../assets/icons/scroll-text.svg" with { type: "text" }
 import iconSearch from "../../assets/icons/search.svg" with { type: "text" }
 import iconSettings from "../../assets/icons/settings.svg" with { type: "text" }
@@ -54,6 +56,7 @@ export const ICONS = {
   copy: iconCopy,
   download: iconDownload,
   ellipsis: iconEllipsis,
+  externalLink: iconExternalLink,
   fileDiff: iconFileDiff,
   filePen: iconFilePen,
   fileSearch: iconFileSearch,
@@ -73,6 +76,7 @@ export const ICONS = {
   panelRightClose: iconPanelRightClose,
   plug: iconPlug,
   plus: iconPlus,
+  refreshCw: iconRefreshCw,
   scrollText: iconScrollText,
   search: iconSearch,
   settings: iconSettings,

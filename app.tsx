@@ -3,11 +3,12 @@ import { useState } from "react"
 import { motion, render, useWindowSize } from "@gpuix/react"
 import type { EventPayload } from "@gpuix/native"
 
-import { cancel, closeAll, send } from "./src/agent/agent"
+import { cancel, closeAll, forkSessionReporting, send } from "./src/agent/agent"
 import { stopAllBackgroundCommands } from "./src/tools"
 import { refreshCredentials } from "./src/agent/credentials"
 import { checkForUpdate } from "./src/update"
 import { Composer } from "./src/views/composer"
+import { ChangesView } from "./src/views/changes"
 import { CommandPalette } from "./src/views/palette"
 import { Dialogs } from "./src/views/dialogs"
 import { SettingsPage } from "./src/views/settings"
@@ -22,6 +23,7 @@ import {
   TRAFFIC_LIGHT_INSET,
 } from "./src/ui/theme"
 import { NoSession, Transcript } from "./src/views/transcript"
+import { Icon } from "./src/ui/icons"
 import { Badge, Explain, IconButton, Label, TooltipProvider } from "./src/ui/ui"
 import { isClean, refreshGitStatus, summarise } from "./src/workspace/git"
 import { CAN_PICK_IMAGES, pasteImage } from "./src/workspace/images"
@@ -31,6 +33,7 @@ import {
   findWorkspace,
   flushState,
   getState,
+  closeChangesPane,
   setDialog,
   setOverlay,
   setPalette,
@@ -38,6 +41,7 @@ import {
   setSplit,
   setState,
   startSession,
+  toggleChanges,
   useApp,
   type AppState,
 } from "./src/store"
@@ -110,9 +114,14 @@ function PaneHeader({
   onPeek?: () => void
   canPin?: boolean
 }) {
-  const sessionId = state.panes[index]?.sessionId ?? null
+  const pane = state.panes[index]
+  const sessionId = pane?.sessionId ?? null
   const session = findSession(state, sessionId)
-  const workspace = findWorkspace(state, session?.workspaceId ?? null)
+  const view = pane?.view?.kind === "changes" ? pane.view : null
+  const workspace = findWorkspace(
+    state,
+    session?.workspaceId ?? view?.workspaceId ?? null,
+  )
   const split = state.panes.length > 1
 
   return (
@@ -174,6 +183,16 @@ function PaneHeader({
               </Label>
             </div>
           </>
+        ) : view ? (
+          <>
+            <Label size={text.small} color={color.ghost}>
+              /
+            </Label>
+            <Icon name="fileDiff" size={12} color={color.faint} />
+            <Label size={text.body} color={focused ? color.text : color.faint}>
+              Changes
+            </Label>
+          </>
         ) : (
           <Label size={text.body} color={color.ghost}>
             Empty pane
@@ -186,6 +205,37 @@ function PaneHeader({
         {session?.status === "error" ? <Badge tone={color.danger}>error</Badge> : null}
 
         <div style={{ flexGrow: 1, minWidth: 0 }} />
+
+        {session ? (
+          <IconButton
+            icon="gitBranch"
+            tooltip="Fork this session"
+            testId={`fork-session-${index}`}
+            onClick={() => void forkSessionReporting(session.id, session.id)}
+          />
+        ) : null}
+
+        {session && workspace ? (
+          <IconButton
+            icon="fileDiff"
+            tooltip={
+              state.panes.some(
+                (entry) =>
+                  entry.view?.kind === "changes" &&
+                  entry.view.workspaceId === workspace.id,
+              )
+                ? "Hide changes"
+                : "Show changes"
+            }
+            testId={`toggle-changes-${index}`}
+            active={state.panes.some(
+              (entry) =>
+                entry.view?.kind === "changes" &&
+                entry.view.workspaceId === workspace.id,
+            )}
+            onClick={() => toggleChanges(workspace.id)}
+          />
+        ) : null}
 
         {index === 0 ? (
           <IconButton
@@ -226,12 +276,15 @@ function Pane({
   paneWidth: number
 }) {
   const focused = state.focusedPane === index || state.panes.length === 1
-  const sessionId = state.panes[index]?.sessionId ?? null
+  const pane = state.panes[index]
+  const sessionId = pane?.sessionId ?? null
   const session = findSession(state, sessionId)
+  const view = pane?.view?.kind === "changes" ? pane.view : null
   const workspace = findWorkspace(
     state,
     session?.workspaceId ?? state.activeWorkspaceId,
   )
+  const viewWorkspace = view ? findWorkspace(state, view.workspaceId) : undefined
 
   return (
     <div
@@ -262,17 +315,40 @@ function Pane({
         canPin={canPin}
       />
 
-      {session && workspace ? (
-        <>
-          <Transcript session={session} paneWidth={paneWidth} />
-          <Composer
-            session={session}
-            root={workspace.path}
-            paneWidth={paneWidth}
-            onSend={(prompt, images) => void send(session.id, prompt, images)}
-            onStop={() => cancel(session.id)}
-          />
-        </>
+      {viewWorkspace ? (
+        <ChangesView
+          key={viewWorkspace.id}
+          workspace={viewWorkspace}
+          onClose={() => closeChangesPane(viewWorkspace.id)}
+        />
+      ) : session && workspace ? (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            flexGrow: 1,
+            minHeight: 0,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              flexGrow: 1,
+              minWidth: 0,
+            }}
+          >
+            <Transcript session={session} paneWidth={paneWidth} />
+            <Composer
+              key={session.id}
+              session={session}
+              root={workspace.path}
+              paneWidth={paneWidth}
+              onSend={(prompt, images) => void send(session.id, prompt, images)}
+              onStop={() => cancel(session.id)}
+            />
+          </div>
+        </div>
       ) : (
         <NoSession
           workspace={workspace}

@@ -1,4 +1,4 @@
-import { appendMessage, newId, patchMessage } from "../store"
+import { appendMessage, newId, patchMessage, type SubagentStep } from "../store"
 import { type SearchStep } from "../agent/providers"
 import { requestApproval, type ApprovalRequest } from "./approvals"
 
@@ -25,6 +25,7 @@ export type ToolContext = {
   root: string
   depth?: number
   search?: boolean
+  onStep?: (step: SubagentStep) => void
 }
 
 export type ToolOutput = {
@@ -42,7 +43,7 @@ export type ToolSpec<Input> = {
   label: (input: Input) => string
   run: (
     input: Input,
-    context: ToolContext & { signal: AbortSignal; name: string },
+    context: ToolContext & { signal: AbortSignal; name: string; messageId: string },
   ) => Promise<ToolOutput>
 }
 
@@ -135,46 +136,73 @@ export function forgetToolResults(sessionId: string): void {
   }
 }
 
+const MAX_STEP_CHARS = 2_000
+
 export function defineTool<Input>(
   spec: ToolSpec<Input>,
   context: ToolContext,
 ): HostTool {
+  const report = context.onStep
+  const nested = report ? true : (context.depth ?? 0) > 0
   return {
     name: spec.name,
     description: spec.description,
     inputSchema: spec.inputSchema,
     async execute(rawInput, { signal }) {
       const messageId = newId()
-      appendMessage(context.sessionId, {
-        id: messageId,
-        kind: "tool",
-        at: Date.now(),
-        callId: messageId,
-        name: spec.name,
-        label: spec.name,
-        state: "running",
-        output: "",
-      })
+      let label = spec.name
+      if (report) {
+        report({ id: messageId, name: spec.name, label, state: "running", output: "" })
+      } else if (!nested) {
+        appendMessage(context.sessionId, {
+          id: messageId,
+          kind: "tool",
+          at: Date.now(),
+          callId: messageId,
+          name: spec.name,
+          label: spec.name,
+          state: "running",
+          output: "",
+        })
+      }
       try {
         const input = spec.parse(rawInput)
-        patchMessage(context.sessionId, messageId, { label: spec.label(input) })
-        const result = await spec.run(input, { ...context, signal, name: spec.name })
-        patchMessage(context.sessionId, messageId, {
-          state: "ok",
-          ...(result.label ? { label: result.label } : {}),
-          output: result.text,
-          patch: result.patch,
-          language: result.language,
-          endedAt: Date.now(),
+        label = spec.label(input)
+        if (report) report({ id: messageId, name: spec.name, label, state: "running", output: "" })
+        else if (!nested) patchMessage(context.sessionId, messageId, { label })
+        const result = await spec.run(input, {
+          ...context,
+          signal,
+          name: spec.name,
+          messageId,
         })
+        if (report) {
+          report({
+            id: messageId,
+            name: spec.name,
+            label: result.label ?? label,
+            state: "ok",
+            output: clip(result.text, MAX_STEP_CHARS),
+          })
+        } else if (!nested) {
+          patchMessage(context.sessionId, messageId, {
+            state: "ok",
+            ...(result.label ? { label: result.label } : {}),
+            output: result.text,
+            patch: result.patch,
+            language: result.language,
+            endedAt: Date.now(),
+          })
+        }
         return retain(context.sessionId, spec.name, result.text)
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error)
-        patchMessage(context.sessionId, messageId, {
-          state: text.startsWith(DENIED_PREFIX) ? "denied" : "error",
-          output: text,
-          endedAt: Date.now(),
-        })
+        const state = text.startsWith(DENIED_PREFIX) ? "denied" : "error"
+        if (report) {
+          report({ id: messageId, name: spec.name, label, state, output: text })
+        } else if (!nested) {
+          patchMessage(context.sessionId, messageId, { state, output: text, endedAt: Date.now() })
+        }
         throw error instanceof Error ? error : new Error(text)
       }
     },

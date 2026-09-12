@@ -1,8 +1,12 @@
 import { credential, PROVIDERS, type ProviderId } from "./oauth"
 import { dataOf, sseEvents, toResponsesRequest, translateStream, type Json } from "./responses"
 
-export const GATEWAY_LANGUAGE_MODEL_URL =
-  "https://ai-gateway.vercel.sh/v3/ai/language-model"
+/** libfx 0.0.9 sends chat requests to v4; v3 is still an accepted
+ *  `gatewayChatUrl`, and the two share a wire format apart from image parts. */
+const GATEWAY_LANGUAGE_MODEL_URLS = [
+  "https://ai-gateway.vercel.sh/v4/ai/language-model",
+  "https://ai-gateway.vercel.sh/v3/ai/language-model",
+]
 export const GATEWAY_MODELS_PATH = "/coding-agent/v1/models"
 
 export type ProviderModel = {
@@ -43,41 +47,73 @@ export type PlanLimits = { plan: string | null; limits: Limit[] }
 const WINDOW_LABELS: Record<number, string> = { 300: "5-hour limit", 10080: "Weekly limit" }
 
 function limitsFrom(provider: ProviderId, headers: Headers): PlanLimits | null {
-  const limits: Limit[] =
-    provider === "codex"
-      ? ["primary", "secondary"].flatMap((window) => {
-          const minutes = Number(headers.get(`x-codex-${window}-window-minutes`))
-          const used = Number(headers.get(`x-codex-${window}-used-percent`))
-          if (!minutes || !Number.isFinite(used)) return []
-          const reset = Number(headers.get(`x-codex-${window}-reset-at`))
-          return [
-            {
-              label: WINDOW_LABELS[minutes] ?? `${Math.round(minutes / 60)}-hour limit`,
-              usedPercent: used,
-              resetsAt: reset ? reset * 1000 : null,
-            },
-          ]
-        })
-      : ["requests", "tokens"].flatMap((kind) => {
-          const limit = Number(headers.get(`x-ratelimit-limit-${kind}`))
-          const remaining = Number(headers.get(`x-ratelimit-remaining-${kind}`))
-          if (!limit || !Number.isFinite(remaining)) return []
-          return [
-            {
-              label: kind === "requests" ? "Requests" : "Tokens",
-              usedPercent: Math.round(100 * (1 - remaining / limit)),
-              resetsAt: null,
-            },
-          ]
-        })
+  if (provider !== "codex") return null
+  const limits: Limit[] = ["primary", "secondary"].flatMap((window) => {
+    const minutes = Number(headers.get(`x-codex-${window}-window-minutes`))
+    const used = Number(headers.get(`x-codex-${window}-used-percent`))
+    if (!minutes || !Number.isFinite(used)) return []
+    const reset = Number(headers.get(`x-codex-${window}-reset-at`))
+    return [
+      {
+        label: WINDOW_LABELS[minutes] ?? `${Math.round(minutes / 60)}-hour limit`,
+        usedPercent: used,
+        resetsAt: reset ? reset * 1000 : null,
+      },
+    ]
+  })
   if (limits.length === 0) return null
-  return { plan: provider === "codex" ? headers.get("x-codex-plan-type") : null, limits }
+  return { plan: headers.get("x-codex-plan-type"), limits }
+}
+
+/** Grok's subscription allowance, from the proxy's own billing route. The
+ *  `x-ratelimit-*` response headers do not move between requests, so they
+ *  cannot stand in for this. */
+export async function grokLimits(
+  base: typeof globalThis.fetch = globalThis.fetch,
+): Promise<PlanLimits | null> {
+  try {
+    const auth = await credential("grok")
+    if (!auth) return null
+    const version = await clientVersion("grok", base)
+    const response = await base("https://cli-chat-proxy.grok.com/v1/billing?format=credits", {
+      headers: {
+        authorization: `Bearer ${auth.token}`,
+        accept: "application/json",
+        "x-grok-client-identifier": "fx",
+        ...(version ? { "x-grok-client-version": version } : {}),
+      },
+    })
+    if (!response.ok) return null
+    const body = (await response.json()) as Json
+    const config = (body?.config ?? {}) as Json
+    const percent = config.creditUsagePercent
+    if (typeof percent !== "number") return null
+    const end = config.currentPeriod
+    const endAt = typeof end === "object" && end ? (end as Json).end : null
+    const resetsAt = typeof endAt === "string" ? Date.parse(endAt) : Number.NaN
+    return {
+      plan: null,
+      limits: [
+        {
+          label: "Weekly limit",
+          usedPercent: Math.round(percent),
+          resetsAt: Number.isFinite(resetsAt) ? resetsAt : null,
+        },
+      ],
+    }
+  } catch {
+    return null
+  }
 }
 
 const CATALOGUE_TTL_MS = 10 * 60 * 1000
 const catalogues = new Map<ProviderId, { at: number; models: ProviderModel[] }>()
 
 const versions = new Map<ProviderId, Promise<string | null>>()
+
+export function forgetClientVersions(): void {
+  versions.clear()
+}
 
 function clientVersion(
   provider: ProviderId,
@@ -401,7 +437,9 @@ export function providerFetch(
       }
     }
 
-    if (!url.startsWith(GATEWAY_LANGUAGE_MODEL_URL)) return base(input as RequestInfo, init)
+    if (!GATEWAY_LANGUAGE_MODEL_URLS.some((prefix) => url.startsWith(prefix))) {
+      return base(input as RequestInfo, init)
+    }
     const observedBody = route.onCompaction ? requestBody(init) : undefined
     if (observedBody) route.onCompaction?.(isCompactionRequest(observedBody))
     if (!provider || !model) {
