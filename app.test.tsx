@@ -92,6 +92,7 @@ import {
   undoLastEdit,
   type HostTool,
 } from "./src/tools"
+import { childSessionFor } from "./src/tools/agents"
 import {
   ATTACHMENT_DIR,
   DEFAULT_MODEL,
@@ -642,6 +643,61 @@ describe("new tools", () => {
     for (const tool of ["read_file", "write_file", "shell", "grep_files"]) {
       expect(nested, tool).toContain(tool)
     }
+  })
+
+  it("lets a subagent inherit the parent model, or take another from the picker", () => {
+    const { session, tools } = seed()
+    setState((current) => ({
+      ...current,
+      apiKey: "test-key",
+      models: [
+        { id: "poolside/laguna-s-2.1-free", name: "Laguna S 2.1 Free", efforts: [] },
+        {
+          id: "grok-4.6",
+          name: "Grok 4.6",
+          provider: "grok",
+          efforts: ["low", "high", "xhigh"],
+          defaultEffort: "high",
+        },
+        {
+          id: "gpt-6-astra",
+          name: "GPT-6-Astra",
+          provider: "codex",
+          efforts: ["low", "medium", "high"],
+        },
+      ],
+    }))
+    updateSession(session.id, (current) => ({
+      ...current,
+      model: "grok-4.6",
+      modelName: "Grok 4.6",
+      provider: "grok",
+      effort: "xhigh",
+    }))
+    const parent = findSession(getState(), session.id)!
+    expect(childSessionFor(parent)).toMatchObject({
+      model: "grok-4.6",
+      provider: "grok",
+      effort: "xhigh",
+    })
+    expect(childSessionFor(parent, { model: "gpt-6-astra" })).toMatchObject({
+      model: "gpt-6-astra",
+      provider: "codex",
+      effort: "medium",
+    })
+    expect(childSessionFor(parent, { model: "Grok 4.6", effort: "low" }).effort).toBe("low")
+    expect(() => childSessionFor(parent, { model: "missing" })).toThrow(/No model named missing/)
+    expect(() => childSessionFor(parent, { effort: "nope" })).toThrow(/does not take effort nope/)
+    expect(tools.subagent!.inputSchema).toMatchObject({
+      properties: { model: { type: "string" }, effort: { type: "string" } },
+    })
+  })
+
+  it("refuses a subagent model that this session cannot run", async () => {
+    const { tools } = seed("full-access")
+    await expect(run(tools.subagent!, { task: "survey the repo", model: "missing" })).rejects.toThrow(
+      /No model named missing/,
+    )
   })
 
   it("asks before searching the web, and needs a key", async () => {

@@ -98,6 +98,7 @@ function instructionsFor(root: string, tools: string[]): string[] {
       "- Start a server or watcher with shell background true, then interact or stop by handle.",
       "- Search the web for anything outside the workspace; web_fetch when you already have a URL.",
       "- Delegate wide, self-contained work to subagent so its steps stay out of this conversation.",
+      "- subagent may take a different model and reasoning effort than this conversation, so you can plan on a frontier model and hand implementation to a faster one.",
       "- ask_user_question only when the choice is the user's to make.",
       "- capability_search before assuming something is missing; skill reads one in full.",
       "- vision reads an image file, such as a screenshot of a failing UI or a diagram.",
