@@ -11,7 +11,9 @@ import {
 import {
   CHECKPOINT_DIR,
   appendMessage,
+  checkpointFile,
   appendStreamedText,
+  copySession,
   enqueuePrompt,
   findSession,
   findWorkspace,
@@ -19,11 +21,13 @@ import {
   getState,
   newId,
   notice,
+  recordUsage,
   removeMessage,
   sessionModel,
   shiftQueue,
   NO_CREDENTIAL,
   updateSession,
+  type Session,
 } from "../store"
 import {
   adopt,
@@ -36,6 +40,7 @@ import {
   stopBackgroundCommands,
 } from "../tools"
 import { backing } from "./backing"
+import { refreshPlanLimits } from "./credentials"
 import { imageBlock, mentionBlocks } from "../workspace/files"
 import { type ProviderId } from "./oauth"
 import { refreshGitStatus } from "../workspace/git"
@@ -184,7 +189,7 @@ async function nameSession(sessionId: string, prompt: string): Promise<void> {
 }
 
 function checkpointPath(sessionId: string): string {
-  return path.join(CHECKPOINT_DIR, `${sessionId}.bin`)
+  return checkpointFile(sessionId)
 }
 
 function readCheckpoint(sessionId: string): Uint8Array | undefined {
@@ -216,6 +221,55 @@ function estimateTokens(...parts: unknown[]): number {
     .map((part) => (typeof part === "string" ? part : JSON.stringify(part)))
     .join("")
   return Math.ceil(text.length / CHARS_PER_TOKEN)
+}
+
+type Overhead = { system: number; tools: number; skills: number; mcp: number }
+
+function applyContext(sessionId: string, next: Overhead): void {
+  updateSession(sessionId, (current) => {
+    const { system, tools, skills, mcp } = current.context
+    if (
+      system === next.system &&
+      tools === next.tools &&
+      skills === next.skills &&
+      mcp === next.mcp
+    ) {
+      return current
+    }
+    return {
+      ...current,
+      context: {
+        ...current.context,
+        ...next,
+        used: current.context.used || next.system + next.tools + next.skills + next.mcp,
+      },
+    }
+  })
+}
+
+/** What the session's prompt costs before anyone has said anything, so a new
+ *  session shows its meter instead of waiting for the first turn to build an
+ *  agent. The provider's own count replaces `used` on that first turn. */
+export async function estimateContext(sessionId: string): Promise<void> {
+  const state = getState()
+  const session = findSession(state, sessionId)
+  const workspace = findWorkspace(state, session?.workspaceId ?? null)
+  // A session with a count keeps it, and MCP stays out of the estimate so that
+  // opening a session never starts its servers; the first turn measures both.
+  if (!session || !workspace || session.status === "running" || session.context.used > 0) return
+
+  const hostTools = createTools({ sessionId, root: workspace.path })
+  const system = instructionsFor(
+    workspace.path,
+    hostTools.map((tool) => tool.name),
+  )
+  const skills = await loadSkills(workspace.path)
+  applyContext(sessionId, {
+    system: estimateTokens(system),
+    tools: estimateTokens(hostTools),
+    skills: estimateTokens(skills.instructions, skills.tools),
+    mcp: session.context.mcp,
+  })
 }
 
 async function runtimeFor(sessionId: string): Promise<Runtime> {
@@ -267,16 +321,12 @@ async function runtimeFor(sessionId: string): Promise<Runtime> {
     workspace.path,
     hostTools.map((tool) => tool.name),
   )
-  updateSession(sessionId, (current) => ({
-    ...current,
-    context: {
-      ...current.context,
-      system: estimateTokens(system),
-      tools: estimateTokens(hostTools),
-      skills: estimateTokens(skills.instructions, skills.tools),
-      mcp: estimateTokens(mcp.instructions),
-    },
-  }))
+  applyContext(sessionId, {
+    system: estimateTokens(system),
+    tools: estimateTokens(hostTools),
+    skills: estimateTokens(skills.instructions, skills.tools),
+    mcp: estimateTokens(mcp.instructions),
+  })
   const agent = (await createFxAgent({
     ...back.options,
     instructions: [...system, skills.instructions, mcp.instructions].filter(Boolean),
@@ -519,6 +569,7 @@ export async function send(
 
     const result = await turn.result
     runtime.turn = null
+    recordUsage(sessionId, result.usage)
 
     const failure = result.stopReason === "refused" ? failedRequest(sessionId) : null
     if (failure) {
@@ -545,6 +596,7 @@ export async function send(
     const workspace = findWorkspace(getState(), workspaceId ?? null)
     if (workspace) await endTurn(sessionId, workspace.path)
     if (workspaceId) void refreshGitStatus(workspaceId)
+    void refreshPlanLimits()
   }
 
   const stopped = cancelled.delete(sessionId)
@@ -599,6 +651,50 @@ async function disposeRuntime(
   if (options.checkpoint) await saveCheckpoint(sessionId, runtime.agent)
   await runtime.agent.close()
   await runtime.mcp.release()
+}
+
+export async function forkSession(sessionId: string): Promise<Session | null> {
+  let bytes: Uint8Array | undefined
+  const runtime = runtimes.get(sessionId)
+  if (runtime) {
+    try {
+      bytes = await runtime.agent.checkpoint()
+    } catch {
+      bytes = readCheckpoint(sessionId)
+    }
+  } else {
+    bytes = readCheckpoint(sessionId)
+  }
+
+  const fork = copySession(sessionId)
+  if (!fork) return null
+  if (bytes) {
+    try {
+      mkdirSync(CHECKPOINT_DIR, { recursive: true })
+      writeFileSync(checkpointPath(fork.id), bytes, { mode: 0o600 })
+    } catch (error) {
+      console.error("[fx] could not copy the session checkpoint:", error)
+    }
+  }
+  return fork
+}
+
+/** Forks a session and says so in `reportTo` if there was nothing to fork —
+ *  the session's own transcript cannot carry that notice, since it is the
+ *  thing that just turned out not to exist. */
+export async function forkSessionReporting(
+  sessionId: string,
+  reportTo: string,
+): Promise<Session | null> {
+  const fork = await forkSession(sessionId)
+  if (!fork) {
+    notice(
+      reportTo,
+      "error",
+      "That session no longer exists, so there was nothing to fork.",
+    )
+  }
+  return fork
 }
 
 export async function closeSession(sessionId: string): Promise<void> {

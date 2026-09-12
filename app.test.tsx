@@ -19,10 +19,27 @@ import { connectTest } from "@gpuix/react/automation"
 import { createTestRoot, hasNativeTestRenderer } from "@gpuix/react/testing"
 
 import { FxApp } from "./app"
-import { cleanTitle, fallbackTitle, reloadSkills, cancel, send } from "./src/agent/agent"
+import {
+  cleanTitle,
+  fallbackTitle,
+  forkSession,
+  forkSessionReporting,
+  reloadSkills,
+  cancel,
+  send,
+} from "./src/agent/agent"
 import { loadModels, refreshCredentials } from "./src/agent/credentials"
 import { COMPOSER_CARD_INSET } from "./src/views/composer"
-import { gitDiff, gitLog, gitStatus, isClean, summarise } from "./src/workspace/git"
+import {
+  gitDiff,
+  gitFileDiff,
+  gitLog,
+  gitStatus,
+  isClean,
+  refreshGitStatus,
+  summarise,
+  viewDiff,
+} from "./src/workspace/git"
 import { beginTurn, endTurn, lastTurn, restoreTurn } from "./src/workspace/turns"
 import { loadSkills, splitCommand } from "./src/workspace/skills"
 import {
@@ -70,6 +87,7 @@ import { authorizeUrl, beginSignIn, credential } from "./src/agent/oauth"
 import {
   asGatewayCatalogue,
   bareModel,
+  forgetClientVersions,
   listProviderModels,
   parseCatalogue,
   providerFetch,
@@ -80,6 +98,7 @@ import { compareVersions, latestRelease } from "./src/update"
 import { CONTENT_WIDTH, TITLEBAR_CENTER } from "./src/ui/theme"
 import {
   createTools,
+  editsForFile,
   globToRegExp,
   htmlToText,
   lastEdit,
@@ -89,6 +108,7 @@ import {
   searchRows,
   stopAllBackgroundCommands,
   stopBackgroundCommand,
+  undoEdit,
   undoLastEdit,
   type HostTool,
 } from "./src/tools"
@@ -99,6 +119,7 @@ import {
   NO_CREDENTIAL,
   DIR,
   appendMessage,
+  checkpointFile,
   clearNotices,
   createSession,
   createWorkspace,
@@ -108,9 +129,12 @@ import {
   getState,
   nativeSearch,
   openSession,
+  recordUsage,
   removeQueued,
+  removeSession,
   removeWorkspace,
   resetState,
+  openChangesPane,
   setSettings,
   setSplit,
   setState,
@@ -652,6 +676,7 @@ describe("new tools", () => {
       apiKey: "test-key",
       models: [
         { id: "poolside/laguna-s-2.1-free", name: "Laguna S 2.1 Free", efforts: [] },
+        { id: "xai/grok-4.6", name: "Grok 4.6 (Gateway)", efforts: [] },
         {
           id: "grok-4.6",
           name: "Grok 4.6",
@@ -688,6 +713,14 @@ describe("new tools", () => {
     expect(childSessionFor(parent, { model: "Grok 4.6", effort: "low" }).effort).toBe("low")
     expect(() => childSessionFor(parent, { model: "missing" })).toThrow(/No model named missing/)
     expect(() => childSessionFor(parent, { effort: "nope" })).toThrow(/does not take effort nope/)
+
+    const onCodex = { ...parent, model: "gpt-6-astra", modelName: "GPT-6-Astra", provider: "codex" as const }
+    expect(
+      childSessionFor(onCodex, { model: "grok-4.6" }).provider,
+      "an exact id wins over the Gateway model whose bare name it shares",
+    ).toBe("grok")
+    expect(childSessionFor(onCodex, { model: "xai/grok-4.6" }).provider).toBeNull()
+
     expect(tools.subagent!.inputSchema).toMatchObject({
       properties: { model: { type: "string" }, effort: { type: "string" } },
     })
@@ -698,6 +731,56 @@ describe("new tools", () => {
     await expect(run(tools.subagent!, { task: "survey the repo", model: "missing" })).rejects.toThrow(
       /No model named missing/,
     )
+  })
+
+  it("keeps a subagent's own tool calls out of the main transcript, unlike a top-level call", async () => {
+    const { root, session } = seed()
+    writeFileSync(path.join(root, "note.txt"), "hello")
+
+    const before = messagesOf(session.id).length
+    const topLevel = createTools({ sessionId: session.id, root })
+    await run(topLevel.find((tool) => tool.name === "read_file")!, { path: "note.txt" })
+    expect(messagesOf(session.id).length, "a top-level call adds a row").toBe(before + 1)
+    const topRow = messagesOf(session.id).at(-1)
+    expect(topRow?.kind === "tool" && topRow.name).toBe("read_file")
+
+    const afterTopLevel = messagesOf(session.id).length
+    const nestedTools = createTools({ sessionId: session.id, root, depth: 1 })
+    await run(nestedTools.find((tool) => tool.name === "read_file")!, { path: "note.txt" })
+    expect(
+      messagesOf(session.id).length,
+      "a subagent's own nested call must not leak into the transcript",
+    ).toBe(afterTopLevel)
+  })
+
+  it("reports a subagent step's own label and state, including when it fails", async () => {
+    const { root, session } = seed()
+    const steps: { id: string; name: string; label: string; state: string; output: string }[] = []
+    const nestedTools = createTools({
+      sessionId: session.id,
+      root,
+      depth: 1,
+      onStep: (step) => steps.push({ ...step }),
+    })
+
+    writeFileSync(path.join(root, "note.txt"), "hello")
+    await run(nestedTools.find((tool) => tool.name === "read_file")!, { path: "note.txt" })
+    const done = steps.at(-1)!
+    expect(done.state).toBe("ok")
+    expect(done.label).toContain("note.txt")
+    expect(done.output).toContain("hello")
+
+    await expect(
+      run(nestedTools.find((tool) => tool.name === "read_file")!, { path: "gone.txt" }),
+    ).rejects.toThrow(/no such file|ENOENT/i)
+    const failed = steps.at(-1)!
+    expect(failed.state).toBe("error")
+    expect(failed.label, "a failed step still names what it was working on").toBe("gone.txt")
+
+    expect(
+      messagesOf(session.id).some((message) => message.kind === "tool"),
+      "reported steps still write no transcript row",
+    ).toBe(false)
   })
 
   it("asks before searching the web, and needs a key", async () => {
@@ -769,6 +852,81 @@ describe("git", () => {
     expect(status?.unstaged).toBe(1)
     expect(status?.untracked).toBe(1)
     expect(isClean(status!)).toBe(false)
+  })
+
+  it("lists each changed file with its status and line counts", async () => {
+    const root = repo()
+    writeFileSync(path.join(root, "kept.txt"), "one\ntwo\n")
+    writeFileSync(path.join(root, "fresh.txt"), "new\n")
+    execFileSync("git", ["add", "fresh.txt"], { cwd: root, stdio: "ignore" })
+    writeFileSync(path.join(root, "loose.txt"), "loose\n")
+
+    const status = await gitStatus(root)
+    const byPath = new Map((status?.files ?? []).map((file) => [file.path, file]))
+    expect(byPath.get("kept.txt")).toMatchObject({
+      code: "M",
+      staged: false,
+      unstaged: true,
+      added: 1,
+      deleted: 0,
+    })
+    expect(byPath.get("fresh.txt")).toMatchObject({ code: "A", staged: true, added: 1 })
+    expect(byPath.get("loose.txt")).toMatchObject({ code: "?", untracked: true })
+  })
+
+  it("shows repo changes outside a nested workspace with their real paths", async () => {
+    const root = repo()
+    const nested = path.join(root, "pkg")
+    mkdirSync(nested)
+    writeFileSync(path.join(root, "kept.txt"), "one\ntwo\n")
+    writeFileSync(path.join(nested, "in.txt"), "in\n")
+
+    const status = await gitStatus(nested)
+    const byRepo = new Map((status?.files ?? []).map((file) => [file.repoPath, file]))
+    expect(byRepo.get("kept.txt")?.path).toBe(path.join("..", "kept.txt"))
+    expect(byRepo.get("pkg/in.txt")?.path).toBe(path.join("in.txt"))
+  })
+
+  it("reads a per-file diff for staged, worktree and untracked changes", async () => {
+    const root = repo()
+    writeFileSync(path.join(root, "kept.txt"), "one\ntwo\n")
+    writeFileSync(path.join(root, "fresh.txt"), "new\n")
+    execFileSync("git", ["add", "fresh.txt"], { cwd: root, stdio: "ignore" })
+    writeFileSync(path.join(root, "loose.txt"), "loose\n")
+
+    const status = (await gitStatus(root))!
+    const file = (name: string) => status.files.find((f) => f.repoPath === name)!
+
+    expect(await gitFileDiff(status, file("kept.txt"), "worktree")).toContain("+two")
+    expect(await gitFileDiff(status, file("kept.txt"), "staged")).toBe("")
+    expect(await gitFileDiff(status, file("fresh.txt"), "staged")).toContain("+new")
+    const untracked = await gitFileDiff(status, file("loose.txt"), "untracked")
+    expect(untracked).toContain("new file mode")
+    expect(untracked).toContain("+loose")
+  })
+
+  it("keeps an open diff in step with the worktree and drops it when clean", async () => {
+    const root = repo()
+    const workspace = createWorkspace(root, path.basename(root))
+    writeFileSync(path.join(root, "kept.txt"), "one\ntwo\n")
+    await refreshGitStatus(workspace.id)
+
+    const file = getState().git[workspace.id]!.files.find((f) => f.repoPath === "kept.txt")!
+    viewDiff(workspace.id, file, "worktree")
+    await vi.waitFor(() =>
+      expect(getState().diffView[workspace.id]?.tabs[0]?.patch).toContain("+two"),
+    )
+    expect(getState().diffView[workspace.id]?.active).toBe("worktree:kept.txt")
+
+    writeFileSync(path.join(root, "kept.txt"), "one\nthree\n")
+    await refreshGitStatus(workspace.id)
+    await vi.waitFor(() =>
+      expect(getState().diffView[workspace.id]?.tabs[0]?.patch).toContain("+three"),
+    )
+
+    writeFileSync(path.join(root, "kept.txt"), "one\n")
+    await refreshGitStatus(workspace.id)
+    expect(getState().diffView[workspace.id]).toBeUndefined()
   })
 
   it("is null outside a repository, rather than throwing", async () => {
@@ -2214,6 +2372,21 @@ describe("@ mentions", () => {
     expect(() => undoLastEdit(session.id)).toThrow(/Nothing to undo/)
   })
 
+  it("undoes one file's edit without touching another's", async () => {
+    const { session, tools, root } = seed("full-access")
+
+    await run(tools.write_file, { path: "a.txt", content: "a\n" })
+    await run(tools.write_file, { path: "b.txt", content: "b\n" })
+
+    expect(editsForFile(session.id, "a.txt")).toBe(true)
+    expect(undoEdit(session.id, "a.txt")).toContain("a.txt")
+    expect(existsSync(path.join(root, "a.txt"))).toBe(false)
+    expect(readFileSync(path.join(root, "b.txt"), "utf8")).toBe("b\n")
+    expect(editsForFile(session.id, "a.txt")).toBe(false)
+    expect(lastEdit(session.id)).toBe("b.txt")
+    expect(() => undoEdit(session.id, "a.txt")).toThrow(/no tracked edit/)
+  })
+
   it("undoing a file the write created removes it again", async () => {
     const { session, tools, root } = seed("full-access")
 
@@ -2240,6 +2413,26 @@ describe("@ mentions", () => {
 
     stopBackgroundCommand(live[0]!.handle)
     expect(getState().background[session.id]).toEqual([])
+  })
+
+  it("retains a background command's log and finds its localhost url", async () => {
+    const { session, tools } = seed("full-access")
+
+    const started = await run(tools.shell, {
+      command: "printf 'ready\\nhttp://localhost:8123/app up\\n'; sleep 30",
+      background: true,
+    })
+    expect(String(started)).toContain("Still running")
+
+    await vi.waitFor(() => {
+      const entry = getState().background[session.id]?.[0]
+      expect(entry?.log).toContain("ready")
+      expect(entry?.urls).toContain("http://localhost:8123/app")
+      expect(entry?.startedAt).toBeGreaterThan(0)
+    })
+
+    const live = getState().background[session.id] ?? []
+    stopBackgroundCommand(live[0]!.handle)
   })
 
   it("hands a mentioned image to the vision tool instead of refusing it as binary", () => {
@@ -2339,6 +2532,112 @@ async function mount(width = 1280, height = 800) {
 }
 
 describeNative("fx app", () => {
+  it("shows changed files and their diffs beside the conversation", async () => {
+    const root = tempDir()
+    const git = (args: string[]) =>
+      execFileSync("git", args, {
+        cwd: root,
+        stdio: "ignore",
+        env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
+      })
+    git(["init", "--initial-branch=trunk"])
+    git(["config", "user.email", "test@example.com"])
+    git(["config", "user.name", "Test"])
+    writeFileSync(path.join(root, "kept.txt"), "one\n")
+    git(["add", "."])
+    git(["commit", "-m", "first"])
+    writeFileSync(path.join(root, "kept.txt"), "one\ntwo\n")
+    writeFileSync(path.join(root, "loose.txt"), "loose\n")
+
+    const workspace = createWorkspace(root, "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    appendMessage(session.id, {
+      id: "u1",
+      kind: "user",
+      at: Date.now(),
+      text: "hello",
+    })
+
+    const { renderer, app } = await mount()
+    await app.getByTestId("toggle-changes-0").click()
+    await app.getByTestId("changes-view").waitFor()
+    expect(getState().panes).toHaveLength(2)
+    expect(getState().panes[1]?.view).toMatchObject({ kind: "changes" })
+
+    await app.getByTestId("change-worktree-kept.txt").waitFor()
+    await app.getByTestId("change-untracked-loose.txt").waitFor()
+    await app.getByTestId("changes-combined").waitFor()
+    await vi.waitFor(() => expect(renderer.getPaintedText()).toContain("two"))
+
+    await app.getByTestId("change-worktree-kept.txt").click()
+    await app.getByTestId("change-tab-worktree:kept.txt").waitFor()
+    await vi.waitFor(() => expect(renderer.getPaintedText()).toContain("two"))
+
+    await app.getByTestId("change-tab-files").click()
+    await app.getByTestId("change-untracked-loose.txt").waitFor()
+
+    await app.getByTestId("changes-close").click()
+    expect(getState().panes).toHaveLength(1)
+    await app.close()
+  })
+
+  it("scrolls the changes tab strip and keeps a new tab in view", async () => {
+    const root = tempDir()
+    const git = (args: string[]) =>
+      execFileSync("git", args, {
+        cwd: root,
+        stdio: "ignore",
+        env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
+      })
+    git(["init", "--initial-branch=trunk"])
+    git(["config", "user.email", "test@example.com"])
+    git(["config", "user.name", "Test"])
+    writeFileSync(path.join(root, "kept.txt"), "one\n")
+    git(["add", "."])
+    git(["commit", "-m", "first"])
+    for (let index = 0; index < 12; index += 1) {
+      writeFileSync(
+        path.join(root, `file-${String(index).padStart(2, "0")}-with-a-long-name.txt`),
+        `v${index}\n`,
+      )
+    }
+    const workspace = createWorkspace(root, "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    openChangesPane(workspace.id)
+
+    const { renderer, app } = await mount(800, 600)
+    await app.getByTestId("changes-view").waitFor()
+    await vi.waitFor(() =>
+      expect(getState().git[workspace.id]?.files).toHaveLength(12),
+    )
+
+    const files = getState().git[workspace.id]!.files
+    for (const file of files.slice(0, 8)) viewDiff(workspace.id, file, "untracked")
+
+    await app.getByTestId("changes-tabstrip").waitFor()
+    const strip = renderer.findByTestId("changes-tabstrip")
+    expect(strip).toBeTruthy()
+    await vi.waitFor(() => {
+      const offset = renderer.getScrollOffset(strip!.id)
+      expect(offset?.[0], "auto-scrolled to the newest tab").toBeLessThan(0)
+    })
+
+    const bounds = renderer.getElementBounds(strip!.id)!
+    renderer.nativeSimulateScrollWheel(
+      bounds[0] + bounds[2] / 2,
+      bounds[1] + bounds[3] / 2,
+      400,
+      0,
+    )
+    const offset = renderer.getScrollOffset(strip!.id)
+    expect(offset?.[0], "wheel pans back toward the first tab").toBeGreaterThan(
+      -100_000,
+    )
+    await app.close()
+  })
+
   it("walks from an empty window to an open session", async () => {
     const workspacePath = tempDir()
     const { renderer, app } = await mount()
@@ -3842,6 +4141,92 @@ process.stdin.on("data", chunk => {
     await app.close()
   })
 
+  it("reads Grok's plan usage from its billing route, not from the response headers", async () => {
+    mkdirSync(DIR, { recursive: true })
+    writeFileSync(
+      path.join(DIR, "providers.json"),
+      JSON.stringify({
+        grok: {
+          accessToken: "tok",
+          refreshToken: "r",
+          expiresAt: Date.now() + 3_600_000,
+          accountId: null,
+          account: "someone@example.com",
+        },
+      }),
+    )
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    updateSession(session.id, (current) => ({
+      ...current,
+      model: "grok-4.6",
+      provider: "grok",
+      context: { ...current.context, used: 12_000 },
+    }))
+    setState((current) => ({
+      ...current,
+      apiKey: null,
+      models: [{ id: "grok-4.6", name: "Grok 4.6", provider: "grok", contextWindow: 500_000 }],
+    }))
+
+    const end = new Date(Date.now() + 3 * 86_400_000 + 3_600_000).toISOString()
+    let sawBilling = false
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String((input as Request)?.url ?? input)
+      if (url === "https://x.ai/cli/stable") return new Response("1.0.30")
+      if (url.includes("/billing")) {
+        sawBilling = true
+        return Response.json({
+          config: {
+            currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", start: end, end },
+            creditUsagePercent: 3.0,
+            productUsage: [{ product: "GrokBuild", usagePercent: 3.0 }],
+          },
+        })
+      }
+      if (!url.endsWith("/responses")) return Response.json({ models: [] })
+      return new Response(
+        `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "done." })}\n\n` +
+          `data: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 1_000, output_tokens: 10 } } })}\n\n` +
+          "data: [DONE]\n\n",
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+            "x-ratelimit-limit-tokens": "53000000",
+            "x-ratelimit-remaining-tokens": "53000000",
+          },
+        },
+      )
+    }) as unknown as typeof fetch
+    try {
+      await send(session.id, "hello")
+      await vi.waitFor(() => expect(sawBilling).toBe(true))
+      await vi.waitFor(() => expect(getState().limits.grok).toBeDefined())
+    } finally {
+      globalThis.fetch = realFetch
+      rmSync(path.join(DIR, "providers.json"), { force: true })
+    }
+
+    expect(getState().limits.grok).toEqual({
+      plan: null,
+      limits: [
+        { label: "Weekly limit", usedPercent: 3, resetsAt: Date.parse(end) },
+      ],
+    })
+
+    const { renderer, app } = await mount()
+    await app.getByTestId("context-meter").click()
+    const painted = renderer.getPaintedText().join("\n")
+    expect(painted).toContain("Plan usage")
+    expect(painted).toContain("Weekly limit")
+    expect(painted).toContain("3% used")
+    expect(painted).toContain("Resets in 3d")
+    await app.close()
+  })
+
   it("keeps one store when a hot reload evaluates the module again", async () => {
     vi.resetModules()
     const reloaded = await import("./src/store")
@@ -3850,6 +4235,150 @@ process.stdin.on("data", chunk => {
     const workspace = createWorkspace(tempDir(), "demo")
     reloaded.openSession(reloaded.createSession(workspace.id).id, 0)
     expect(getState().sessions).toHaveLength(1)
+  })
+
+  it("drops subagent steps saved as bare tool names instead of crashing the card", async () => {
+    mkdirSync(DIR, { recursive: true })
+    writeFileSync(
+      path.join(DIR, "state.json"),
+      JSON.stringify({
+        workspaces: [{ id: "w1", name: "demo", path: tempDir(), createdAt: 1 }],
+        sessions: [
+          {
+            id: "s1",
+            workspaceId: "w1",
+            title: "Old session",
+            createdAt: 1,
+            updatedAt: 1,
+            model: null,
+            modelName: null,
+            provider: null,
+            effort: null,
+            fast: false,
+            mode: "ask",
+            status: "idle",
+            compacting: false,
+            context: { used: 0, system: 0, tools: 0, mcp: 0, skills: 0 },
+            grants: [],
+            messages: [
+              {
+                id: "sub1",
+                kind: "tool",
+                at: 1,
+                endedAt: 2,
+                callId: "sub1",
+                name: "subagent",
+                label: "survey the repo · done",
+                state: "ok",
+                output: "Done.",
+                steps: ["read_file", "grep_files"],
+              },
+            ],
+          },
+        ],
+        activeWorkspaceId: "w1",
+        panes: [{ sessionId: "s1" }],
+        focusedPane: 0,
+        splitRatio: 0.5,
+        sidebarCollapsed: false,
+      }),
+    )
+
+    delete (globalThis as { fxUiStore?: unknown }).fxUiStore
+    vi.resetModules()
+    const reloaded = await import("./src/store")
+    const saved = reloaded.getState().sessions[0]?.messages[0]
+    expect(saved?.kind).toBe("tool")
+    expect(saved?.kind === "tool" && saved.steps).toBeUndefined()
+  })
+
+  it("keeps a subagent's nested tool calls when they are already in the new shape", async () => {
+    const { session } = seed()
+    appendMessage(session.id, {
+      id: "sub2",
+      kind: "tool",
+      at: Date.now() - 5_000,
+      endedAt: Date.now(),
+      callId: "sub2",
+      name: "subagent",
+      label: "survey the repo · done",
+      state: "ok",
+      output: "The repo is small.",
+      steps: [{ id: "a", name: "read_file", label: "readme.md", state: "ok", output: "hello" }],
+    })
+
+    const { app, renderer } = await mount()
+    await app.getByTestId("tool-sub2").waitFor()
+    await app.getByTestId("tool-sub2").click()
+    await settle()
+    renderer.flush()
+    await app.getByTestId("subagent-step-a").waitFor()
+    expect(renderer.getPaintedText().join(" ")).toContain("readme.md")
+    await app.close()
+  })
+
+  it("reaches a subagent's steps from the keyboard, and moves between them", async () => {
+    const { session } = seed()
+    appendMessage(session.id, {
+      id: "sub3",
+      kind: "tool",
+      at: Date.now() - 5_000,
+      endedAt: Date.now(),
+      callId: "sub3",
+      name: "subagent",
+      label: "survey the repo · done",
+      state: "ok",
+      output: "The repo is small.",
+      steps: [
+        { id: "a", name: "read_file", label: "readme.md", state: "ok", output: "first body" },
+        { id: "b", name: "grep_files", label: "token", state: "ok", output: "second body" },
+      ],
+    })
+
+    const { app, renderer } = await mount()
+    await app.getByTestId("tool-sub3").click()
+    await settle()
+    renderer.flush()
+
+    const first = await app.getByTestId("subagent-step-a").element()
+    renderer.focusElement(first.id)
+    renderer.flush()
+
+    await app.getByTestId("subagent-step-a").press("enter")
+    await settle()
+    renderer.flush()
+    expect(renderer.getPaintedText().join(" "), "enter expands the focused step").toContain(
+      "first body",
+    )
+
+    await app.getByTestId("subagent-step-a").press("down")
+    renderer.flush()
+    renderer.simulateKeystrokes("enter")
+    await settle()
+    renderer.flush()
+    const painted = renderer.getPaintedText().join(" ")
+    expect(painted, "down moved focus to the next step").toContain("second body")
+    expect(painted, "the first step stays open").toContain("first body")
+
+    await app.close()
+  })
+
+  it("says so when a fork has nothing to fork", async () => {
+    const { session } = seed()
+    appendMessage(session.id, {
+      id: "u1",
+      kind: "user",
+      at: Date.now(),
+      text: "keep me",
+    })
+
+    const fork = await forkSessionReporting("gone-session", session.id)
+    expect(fork).toBeNull()
+
+    const last = messagesOf(session.id).at(-1)
+    expect(last?.kind).toBe("notice")
+    expect(last?.kind === "notice" && last.tone).toBe("error")
+    expect(last?.kind === "notice" && last.text).toContain("no longer exists")
   })
 
   it("picks an effort from the slider and restarts the agent for it", async () => {
@@ -3971,6 +4500,10 @@ process.stdin.on("data", chunk => {
       })
     }) as unknown as typeof fetch
 
+    // The version is cached per provider for the life of the process, so a
+    // test that ran earlier against the live endpoint would otherwise decide
+    // this one's header.
+    forgetClientVersions()
     await providerFetch(stub, { provider: "grok" })(
       "https://ai-gateway.vercel.sh/v3/ai/language-model",
       {
@@ -4635,6 +5168,36 @@ process.stdin.on("data", chunk => {
     await app.close()
   })
 
+  it("shows the context meter on a session that has not sent anything yet", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    setState((current) => ({
+      ...current,
+      apiKey: "gateway-key",
+      models: [{ ...DEFAULT_MODEL, contextWindow: 1_000_000 }],
+    }))
+
+    expect(findSession(getState(), session.id)!.context.used).toBe(0)
+
+    const { renderer, app } = await mount()
+    await app.getByTestId("context-meter").waitFor()
+    renderer.flush()
+
+    const context = findSession(getState(), session.id)!.context
+    expect(context.system, "the system prompt is counted before any turn").toBeGreaterThan(0)
+    expect(context.tools, "the tools are counted before any turn").toBeGreaterThan(0)
+    expect(context.used).toBe(context.system + context.tools + context.skills + context.mcp)
+
+    await app.getByTestId("context-meter").click()
+    const painted = renderer.getPaintedText().join("\n")
+    expect(painted).toContain("System prompt")
+    expect(painted).toContain("Tools")
+    expect(painted).toContain("/ 1M")
+
+    await app.close()
+  })
+
   it("measures the context on the last request, not as a running total", async () => {
     const workspace = createWorkspace(tempDir(), "demo")
     const session = createSession(workspace.id)
@@ -4767,7 +5330,7 @@ process.stdin.on("data", chunk => {
 
     await app.getByTestId("composer").fill("look at @comp")
     await app.getByTestId("mention-src/composer.tsx").waitFor()
-    expect(await app.getByTestId("mention-picker").textContent()).toBe("src/composer.tsx")
+    expect(await app.getByTestId("mention-picker").textContent()).toContain("src/composer.tsx")
 
     await app.getByTestId("mention-src/composer.tsx").click()
 
@@ -4932,7 +5495,9 @@ process.stdin.on("data", chunk => {
       globalThis.fetch = realFetch
     }
 
-    const users = messagesOf(session.id).filter((message) => message.kind === "user")
+    const users = messagesOf(session.id).filter(
+      (message): message is Extract<Message, { kind: "user" }> => message.kind === "user",
+    )
     expect(users.map((message) => message.text)).toEqual(["first", "second"])
     expect(getState().queue[session.id]).toBeUndefined()
     expect(findSession(getState(), session.id)?.status).toBe("idle")
@@ -4969,8 +5534,11 @@ process.stdin.on("data", chunk => {
         release()
         await first
 
-        expect(messagesOf(session.id).filter((message) => message.kind === "user").map((message) => message.text))
-          .toEqual(["first"])
+        expect(
+          messagesOf(session.id)
+            .filter((message): message is Extract<Message, { kind: "user" }> => message.kind === "user")
+            .map((message) => message.text),
+        ).toEqual(["first"])
         expect(getState().queue[session.id]?.map(({ text, images }) => ({ text, images })))
           .toEqual([{ text: "second", images: ["/tmp/queued-image.png"] }, { text: "third", images: [] }])
       } finally {
@@ -5016,9 +5584,11 @@ process.stdin.on("data", chunk => {
       globalThis.fetch = realFetch
     }
 
-    expect(messagesOf(session.id).filter((message) => message.kind === "user").map((message) => message.text)).toEqual([
-      "first",
-    ])
+    expect(
+      messagesOf(session.id)
+        .filter((message): message is Extract<Message, { kind: "user" }> => message.kind === "user")
+        .map((message) => message.text),
+    ).toEqual(["first"])
     expect(getState().queue[session.id]?.map((item) => item.text)).toEqual(["second"])
   })
 
@@ -5175,6 +5745,38 @@ process.stdin.on("data", chunk => {
     },
   )
 
+  it("keeps the composer and changes view inside a narrow split", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const sessionA = createSession(workspace.id)
+    updateSession(sessionA.id, (current) => ({
+      ...current,
+      model: "openai/gpt-5.6-luna-preview",
+      modelName: "OpenAI GPT-5.6 Luna Preview",
+      mode: "full-access" as const,
+    }))
+    openSession(sessionA.id, 0)
+    openChangesPane(workspace.id)
+
+    const { app } = await mount(1100, 700)
+    await app.getByTestId("pane-1").waitFor()
+    await app.getByTestId("changes-view").waitFor()
+
+    const left = await app.getByTestId("pane-0").bounds()
+    const right = await app.getByTestId("pane-1").bounds()
+    const card = await app.getByTestId("composer-column").bounds()
+    const view = await app.getByTestId("changes-view").bounds()
+
+    expect(card.x, "composer left").toBeGreaterThanOrEqual(left.x)
+    expect(card.x + card.width, "composer right").toBeLessThanOrEqual(
+      left.x + left.width + 1,
+    )
+    expect(view.x, "changes left").toBeGreaterThanOrEqual(right.x)
+    expect(view.x + view.width, "changes right").toBeLessThanOrEqual(
+      right.x + right.width + 1,
+    )
+    await app.close()
+  })
+
   it("opens a new session into the focused pane of a split", async () => {
     const workspace = createWorkspace(tempDir(), "demo")
     openSession(createSession(workspace.id).id, 0)
@@ -5189,6 +5791,26 @@ process.stdin.on("data", chunk => {
 
     expect(getState().panes[1]?.sessionId).toBe(created.id)
     await app.getByTestId("pane-1").getByTestId("composer").waitFor()
+
+    await app.close()
+  })
+
+  it("shows the session when one is opened into a pane that was showing changes", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const first = createSession(workspace.id)
+    openSession(first.id, 0)
+    openChangesPane(workspace.id)
+
+    const { app } = await mount(1100, 700)
+    await app.getByTestId("changes-view").waitFor()
+    expect(getState().panes[1]?.view).toMatchObject({ kind: "changes" })
+
+    const other = createSession(workspace.id)
+    openSession(other.id, 1)
+
+    expect(getState().panes[1]?.view, "the changes view is replaced").toBeUndefined()
+    await app.getByTestId("pane-1").getByTestId("composer").waitFor()
+    expect(await app.getByTestId("changes-view").count()).toBe(0)
 
     await app.close()
   })
@@ -5216,6 +5838,31 @@ process.stdin.on("data", chunk => {
       expect(getState().sidebarCollapsed).toBe(false)
       await app.close()
     }
+  })
+
+  it("hides and reshows the sidebar from its own trigger and the pane header's", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    openSession(createSession(workspace.id).id, 0)
+    const { app, renderer } = await mount(1024, 700)
+
+    let pane = await app.getByTestId("pane-0").bounds()
+    expect(pane.x, "sidebar visible").toBe(SIDEBAR_WIDTH)
+
+    await app.getByTestId("hide-sidebar").click()
+    expect(getState().sidebarCollapsed).toBe(true)
+    renderer.clockFastForward(300)
+    renderer.flush()
+    pane = await app.getByTestId("pane-0").bounds()
+    expect(pane.x, "sidebar hidden").toBe(0)
+
+    await app.getByTestId("show-sidebar").click()
+    expect(getState().sidebarCollapsed).toBe(false)
+    renderer.clockFastForward(300)
+    renderer.flush()
+    pane = await app.getByTestId("pane-0").bounds()
+    expect(pane.x, "sidebar visible again").toBe(SIDEBAR_WIDTH)
+
+    await app.close()
   })
 
   it("centres the transcript and the composer on one column", async () => {
@@ -5252,5 +5899,322 @@ process.stdin.on("data", chunk => {
     expect(getState().overlay).toBeNull()
 
     await app.close()
+  })
+
+  it("finds a message in another session and jumps to its turn", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    appendMessage(session.id, {
+      id: "target",
+      kind: "user",
+      at: Date.now() - 60_000,
+      text: "remember the pelican",
+    })
+    for (let index = 0; index < 60; index += 1) {
+      appendMessage(session.id, {
+        id: `fill-${index}`,
+        kind: "user",
+        at: Date.now(),
+        text: `note ${index}`,
+      })
+    }
+    openSession(session.id, 0)
+    const { renderer, app } = await mount()
+    await vi.waitFor(() =>
+      expect(renderer.getPaintedText()).toContain("note 59"),
+    )
+    expect(renderer.getPaintedText()).not.toContain("remember the pelican")
+
+    await app.getByTestId("open-palette").click()
+    await app.getByTestId("palette").waitFor()
+    await app.getByTestId("palette-input").fill("pelican")
+    await app.getByTestId(`command-hit:${session.id}:target`).waitFor()
+
+    await app.getByTestId(`command-hit:${session.id}:target`).click()
+    expect(getState().overlay).toBeNull()
+    await vi.waitFor(() =>
+      expect(renderer.getPaintedText()).toContain("remember the pelican"),
+    )
+    await app.close()
+  })
+
+  it("opens the process drawer with a live log, url, and stop", async () => {
+    const { session, tools } = seed("full-access")
+    const started = await run(tools.shell, {
+      command: "printf 'listening\\nhttp://localhost:8199/ui ready\\n'; sleep 30",
+      background: true,
+    })
+    expect(String(started)).toContain("Still running")
+
+    const { renderer, app } = await mount()
+    const handle = getState().background[session.id]![0]!.handle
+
+    await app.getByTestId("background-chip").click()
+    await app.getByTestId(`toggle-log-${handle}`).waitFor()
+    await vi.waitFor(() =>
+      expect(renderer.getPaintedText().join(" ")).toContain("running"),
+    )
+
+    await app.getByTestId(`toggle-log-${handle}`).click()
+    await vi.waitFor(() =>
+      expect(renderer.getPaintedText().join(" ")).toContain("listening"),
+    )
+
+    await app.getByTestId(`open-url-http://localhost:8199/ui`).waitFor()
+
+    await app.getByTestId(`stop-background-${handle}`).click()
+    await vi.waitFor(() =>
+      expect(getState().background[session.id] ?? []).toEqual([]),
+    )
+    await app.close()
+  })
+
+  it("offers commands next to skills in the / menu and runs them", async () => {
+    const { session } = seed()
+    const { app } = await mount()
+
+    await app.getByTestId("composer").fill("/")
+    await app.getByTestId("mention-new").waitFor()
+    await app.getByTestId("mention-model").waitFor()
+    expect(await app.getByTestId("mention-picker").textContent()).toContain("Commands")
+
+    await app.getByTestId("composer").fill("/permissions a")
+    await app.getByTestId("mention-auto").click()
+    expect(getState().sessions.find((entry) => entry.id === session.id)?.mode).toBe("auto")
+
+    await app.getByTestId("composer").fill("/model ")
+    await app.getByTestId("mention-auto").waitFor()
+
+    await app.getByTestId("composer").fill("/new")
+    await app.getByTestId("mention-new").click()
+    const shown = getState().panes[0]!.sessionId
+    expect(shown).not.toBe(session.id)
+    expect(getState().sessions.some((entry) => entry.id === shown)).toBe(true)
+
+    await app.close()
+  })
+
+  it("navigates the / menu with ctrl-n/ctrl-p, since a focused textarea never sees plain arrow keys", async () => {
+    const { session } = seed()
+    const { app } = await mount()
+
+    await app.getByTestId("composer").fill("/")
+    await app.getByTestId("mention-new").waitFor()
+    // "new" is highlighted first; ctrl-n moves to "rename".
+    await app.getByTestId("composer").press("ctrl-n")
+    await app.getByTestId("composer").press("enter")
+    expect(getState().overlay).toEqual({
+      kind: "rename-session",
+      sessionId: session.id,
+      value: session.title,
+    })
+    expect(getState().panes[0]!.sessionId).toBe(session.id)
+
+    setState((current) => ({ ...current, overlay: null }))
+    await app.getByTestId("composer").fill("/")
+    await app.getByTestId("mention-new").waitFor()
+    // ctrl-n then ctrl-p should land back on "new".
+    await app.getByTestId("composer").press("ctrl-n")
+    await app.getByTestId("composer").press("ctrl-p")
+    await app.getByTestId("composer").press("enter")
+    const shown = getState().panes[0]!.sessionId
+    expect(shown).not.toBe(session.id)
+    expect(getState().sessions.some((entry) => entry.id === shown)).toBe(true)
+
+    await app.close()
+  })
+
+  it("does not leave a literal tab character in the draft when tab picks a / command", async () => {
+    const { session } = seed()
+    const { app } = await mount()
+
+    await app.getByTestId("composer").fill("/")
+    await app.getByTestId("mention-new").waitFor()
+    await app.getByTestId("composer").press("tab")
+
+    const shown = getState().panes[0]!.sessionId
+    expect(shown).not.toBe(session.id)
+    expect(getState().sessions.some((entry) => entry.id === shown)).toBe(true)
+    expect(await app.getByTestId("composer").textContent()).toBe("")
+
+    await app.close()
+  })
+
+  it("scrolls the / menu to keep ctrl-n/ctrl-p navigation in view", async () => {
+    const { root } = seed()
+    mkdirSync(path.join(root, ".fx", "skills"), { recursive: true })
+    for (let index = 0; index < 12; index += 1) {
+      writeFileSync(
+        path.join(root, ".fx", "skills", `skill-${index}.md`),
+        `---\nname: skill-${index}\n---\nBody.`,
+      )
+    }
+    const { app, renderer } = await mount()
+
+    await app.getByTestId("composer").fill("/")
+    await app.getByTestId("mention-picker").waitFor()
+    await vi.waitFor(async () =>
+      expect(await app.getByTestId("mention-skill-11").count()).toBe(1),
+    )
+
+    const picker = await app.getByTestId("mention-picker").element()
+    const before = renderer.getScrollOffset(picker.id)
+    for (let index = 0; index < 10; index += 1) {
+      await app.getByTestId("composer").press("ctrl-n")
+      await settle()
+    }
+    const after = renderer.getScrollOffset(picker.id)
+    expect(after?.[1]).toBeLessThan(before?.[1] ?? 0)
+
+    await app.close()
+  })
+
+  it("shows a delegated task as an expandable activity card, with its own tool calls nested inside", async () => {
+    const { session } = seed()
+    appendMessage(session.id, {
+      id: "sub1",
+      kind: "tool",
+      at: Date.now() - 5_000,
+      endedAt: Date.now(),
+      callId: "sub1",
+      name: "subagent",
+      label: "survey the auth flow · done",
+      state: "ok",
+      output: "The auth flow lives in src/auth and uses tokens.",
+      steps: [
+        { id: "s1", name: "grep_files", label: "token", state: "ok", output: "src/auth/session.ts:12" },
+        { id: "s2", name: "read_file", label: "src/auth/session.ts", state: "ok", output: "export function issue() {}" },
+        { id: "s3", name: "read_file", label: "src/auth/verify.ts", state: "ok", output: "export function verify() {}" },
+        { id: "s4", name: "glob_files", label: "src/auth/*.ts", state: "ok", output: "" },
+      ],
+    })
+    const { renderer, app } = await mount()
+
+    await app.getByTestId("tool-sub1").waitFor()
+    const painted = () => renderer.getPaintedText().join(" ")
+    expect(painted()).toContain("subagent")
+    expect(painted()).toContain("survey the auth flow")
+    expect(painted()).toContain("read_file ×2")
+    expect(painted()).not.toContain("auth flow lives in")
+    expect(await app.getByTestId("subagent-step-s1").count()).toBe(0)
+
+    await app.getByTestId("tool-sub1").click()
+    await vi.waitFor(() =>
+      expect(painted()).toContain("The auth flow lives in src/auth"),
+    )
+    // Expanded, every nested call shows as its own row with a real label,
+    // not just folded into the "read_file ×2" count.
+    await app.getByTestId("subagent-step-s1").waitFor()
+    await app.getByTestId("subagent-step-s2").waitFor()
+    await app.getByTestId("subagent-step-s3").waitFor()
+    expect(painted()).toContain("src/auth/session.ts")
+    expect(painted()).toContain("src/auth/verify.ts")
+    expect(painted()).not.toContain("export function issue")
+
+    await app.getByTestId("subagent-step-s2").click()
+    await vi.waitFor(() => expect(painted()).toContain("export function issue"))
+
+    await app.close()
+  })
+
+  it("records turn usage and shows it by range in settings", async () => {
+    const { session } = seed()
+    recordUsage(session.id, {
+      inputTokens: 1_200,
+      outputTokens: 300,
+      cacheReadTokens: 800,
+      reasoningTokens: 0,
+    })
+    recordUsage(session.id, { inputTokens: 100, outputTokens: 50 })
+
+    const records = getState().usage
+    expect(records).toHaveLength(2)
+    expect(records[0]!.sessionId).toBe(session.id)
+    expect(records[0]!.sessionTitle).toBe(session.title)
+    expect(records[0]!.input).toBe(1_200)
+
+    setSettings(true)
+    const { renderer, app } = await mount()
+    await vi.waitFor(() =>
+      expect(renderer.getPaintedText().join(" ")).toContain("Tokens per turn"),
+    )
+    await vi.waitFor(() =>
+      expect(renderer.getPaintedText().join(" ")).toContain("2 turns"),
+    )
+    expect(renderer.getPaintedText().join(" ")).toContain("in 1.3K")
+
+    await app.getByTestId("usage-range-7d").click()
+    await vi.waitFor(() =>
+      expect(renderer.getPaintedText().join(" ")).toContain("2 turns"),
+    )
+    await app.close()
+  })
+
+  it("forks a session into the second pane", async () => {
+    const { session } = seed()
+    appendMessage(session.id, {
+      id: "m1",
+      kind: "user",
+      at: Date.now(),
+      text: "first approach",
+    })
+
+    const fork = await forkSession(session.id)
+    expect(fork).toBeTruthy()
+    expect(fork!.title).toBe(`${session.title} (fork)`)
+    expect(fork!.workspaceId).toBe(session.workspaceId)
+    expect(fork!.forkedFrom).toBe(session.id)
+    expect(messagesOf(fork!.id)).toHaveLength(1)
+    const copied = messagesOf(fork!.id)[0]!
+    expect(copied.kind === "user" && copied.text).toBe("first approach")
+
+    const state = getState()
+    expect(state.panes).toHaveLength(2)
+    expect(state.panes[0]!.sessionId).toBe(session.id)
+    expect(state.panes[1]!.sessionId).toBe(fork!.id)
+  })
+
+  it("forks a session from the pane header, and marks it in the sidebar even once its title is truncated", async () => {
+    const { session } = seed()
+    updateSession(session.id, (current) => ({
+      ...current,
+      title: "Investigate the flaky checkout test that only fails on CI",
+    }))
+    const { app } = await mount()
+
+    await app.getByTestId("fork-session-0").click()
+
+    const state = getState()
+    expect(state.panes).toHaveLength(2)
+    const fork = findSession(state, state.panes[1]!.sessionId)
+    expect(fork).toBeTruthy()
+    expect(fork!.forkedFrom).toBe(session.id)
+
+    await app.getByTestId(`session-fork-badge-${fork!.id}`).waitFor()
+    expect(await app.getByTestId(`session-fork-badge-${session.id}`).count()).toBe(0)
+
+    await app.close()
+  })
+})
+
+describe("removing sessions", () => {
+  it("deletes a removed session's checkpoint, and every checkpoint of a removed workspace", () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const kept = createSession(workspace.id)
+    const removed = createSession(workspace.id)
+    const other = createWorkspace(tempDir(), "other")
+    const elsewhere = createSession(other.id)
+    for (const session of [kept, removed, elsewhere]) {
+      mkdirSync(path.dirname(checkpointFile(session.id)), { recursive: true })
+      writeFileSync(checkpointFile(session.id), "saved agent state")
+    }
+
+    removeSession(removed.id)
+    expect(existsSync(checkpointFile(removed.id))).toBe(false)
+    expect(existsSync(checkpointFile(kept.id))).toBe(true)
+
+    removeWorkspace(workspace.id)
+    expect(existsSync(checkpointFile(kept.id))).toBe(false)
+    expect(existsSync(checkpointFile(elsewhere.id))).toBe(true)
   })
 })

@@ -1,14 +1,16 @@
-import { memo, useState } from "react"
-import { motion } from "@gpuix/react"
+import { memo, useRef, useState } from "react"
+import { motion, useGpuix, type PublicInstance } from "@gpuix/react"
 
 import { type IconName } from "../../ui/icons"
 import { color, columnFor, FONT, space, text } from "../../ui/theme"
 import { Button, Kbd, Label, Paragraph } from "../../ui/ui"
 import {
   canAnswer,
+  clearReveal,
   setSettings,
   startSession,
   type Message,
+  type Reveal,
   type Session,
   type Workspace,
   useApp,
@@ -206,7 +208,24 @@ export function Transcript({
   const copyable = copyableIds(rows, session.status === "running")
   const [heldAt, setHeldAt] = useState<number | null>(null)
   const holdTail = () => setHeldAt(rows.length)
-  const ready = canAnswer(useApp(), session)
+  const app = useApp()
+  const ready = canAnswer(app, session)
+  const renderer = useGpuix().renderer
+  const listRef = useRef<PublicInstance | null>(null)
+  const pendingReveal = useRef<Reveal | null>(null)
+
+  const reveal = app.reveal
+  if (reveal && reveal.sessionId === session.id && !pendingReveal.current) {
+    const index = rows.findIndex((message) => message.id === reveal.messageId)
+    pendingReveal.current = reveal
+    if (index >= 0 && heldAt !== rows.length) setHeldAt(rows.length)
+    setTimeout(() => {
+      pendingReveal.current = null
+      clearReveal()
+      const list = listRef.current
+      if (index >= 0 && list) renderer?.scrollToItem?.(list.id, index, -8)
+    }, 0)
+  }
 
   if (session.messages.length === 0) {
     if (!ready) {
@@ -250,6 +269,7 @@ export function Transcript({
         }}
       >
       <virtual-list
+        ref={listRef}
         alignment="top"
         followTail={heldAt !== rows.length}
         estimatedItemHeight={90}

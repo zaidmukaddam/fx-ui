@@ -235,6 +235,13 @@ function SessionRow({
         )}
       </div>
 
+      {session.forkedFrom ? (
+        <Explain lines={["Forked from another session"]}>
+          <div testId={`session-fork-badge-${session.id}`} style={{ display: "flex" }}>
+            <Icon name="gitBranch" size={11} color={color.ghost} />
+          </div>
+        </Explain>
+      ) : null}
       <Label grow truncate size={text.small} color={open ? color.text : color.tertiary}>
         {session.title}
       </Label>
@@ -319,6 +326,15 @@ export function Sidebar({ state }: { state: AppState }) {
         >
           <Icon name="fxMark" size={16} color={color.text} />
           <div style={{ flexGrow: 1 }} />
+          <IconButton
+            icon="panelLeft"
+            size={24}
+            tooltip="Hide sidebar  ⌘B"
+            testId="hide-sidebar"
+            onClick={() =>
+              setState((current) => ({ ...current, sidebarCollapsed: true }))
+            }
+          />
           <IconButton
             icon="search"
             size={24}

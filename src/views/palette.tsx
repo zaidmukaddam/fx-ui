@@ -9,7 +9,7 @@ import {
 import { Icon, type IconName } from "../ui/icons"
 import { color, nativeTheme, radius, space, text } from "../ui/theme"
 import { Backdrop, Kbd, Label, fieldStyle, overlayStyle } from "../ui/ui"
-import { cancel, reloadSkills } from "../agent/agent"
+import { cancel, forkSessionReporting, reloadSkills } from "../agent/agent"
 import { setUseCli, signInWithFx } from "../agent/credentials"
 import { forgetGrants, lastEdit, undoLastEdit } from "../tools"
 import { lastTurn, restoreTurn } from "../workspace/turns"
@@ -20,18 +20,23 @@ import {
   findWorkspace,
   notice,
   openSession,
+  openSessionAt,
   setDialog,
   setPalette,
   setSettings,
+  toggleChanges,
   setSplit,
   setState,
   startSession,
   type AppState,
+  type Message,
 } from "../store"
 
 const PALETTE_WIDTH = 560
 const PALETTE_TOP = 96
 const MAX_RESULTS = 8
+const MAX_HITS = 4
+const SNIPPET_RADIUS = 40
 
 type Command = {
   id: string
@@ -71,6 +76,22 @@ function buildCommands(state: AppState): Command[] {
     hint: "⌘\\",
     run: () => setSplit(!split),
   })
+  const focusedWorkspace = focused
+    ? (findSession(state, focused)?.workspaceId ?? null)
+    : (state.panes[state.focusedPane]?.view?.workspaceId ?? null)
+  if (focusedWorkspace) {
+    const open = state.panes.some(
+      (pane) =>
+        pane.view?.kind === "changes" && pane.view.workspaceId === focusedWorkspace,
+    )
+    commands.push({
+      id: "toggle-changes",
+      label: open ? "Hide changes" : "Show changes",
+      detail: "Changed files and diffs in a pane",
+      icon: "fileDiff",
+      run: () => toggleChanges(focusedWorkspace),
+    })
+  }
   commands.push({
     id: "toggle-sidebar",
     label: state.sidebarCollapsed ? "Show sidebar" : "Hide sidebar",
@@ -196,6 +217,13 @@ function buildCommands(state: AppState): Command[] {
   if (focused) {
     const session = findSession(state, focused)
     commands.push({
+      id: "fork-session",
+      label: "Fork this session",
+      detail: "Copy it into a second pane to try another approach",
+      icon: "gitBranch",
+      run: () => void forkSessionReporting(focused, focused),
+    })
+    commands.push({
       id: "rename-session",
       label: "Rename this session",
       icon: "filePen",
@@ -223,21 +251,81 @@ function buildCommands(state: AppState): Command[] {
 function rank(commands: Command[], query: string): Command[] {
   const needle = query.trim().toLowerCase()
   if (!needle) return commands.slice(0, MAX_RESULTS)
+  const tokens = needle.split(/\s+/).filter(Boolean)
   return commands
-    .map((command) => ({
-      command,
-      score: `${command.label} ${command.detail ?? ""}`.toLowerCase().indexOf(needle),
-    }))
+    .map((command) => {
+      const hay = `${command.label} ${command.detail ?? ""}`.toLowerCase()
+      let score = 0
+      for (const token of tokens) {
+        const at = hay.indexOf(token)
+        if (at < 0) return { command, score: -1 }
+        score += at
+      }
+      return { command, score }
+    })
     .filter((entry) => entry.score >= 0)
     .sort((a, b) => a.score - b.score)
     .slice(0, MAX_RESULTS)
     .map((entry) => entry.command)
 }
 
+function searchableText(message: Message): string | null {
+  if (message.kind === "user" || message.kind === "assistant") return message.text
+  if (message.kind === "tool") return `${message.name} ${message.label}`
+  if (message.kind === "notice") return message.text
+  return null
+}
+
+function snippet(body: string, tokens: string[]): string {
+  const flat = body.replace(/\s+/g, " ").trim()
+  const lower = flat.toLowerCase()
+  let at = -1
+  for (const token of tokens) {
+    const index = lower.indexOf(token)
+    if (index >= 0 && (at < 0 || index < at)) at = index
+  }
+  if (at < 0) return flat.slice(0, SNIPPET_RADIUS * 2)
+  const start = Math.max(0, at - SNIPPET_RADIUS)
+  const end = Math.min(flat.length, at + SNIPPET_RADIUS * 2)
+  return `${start > 0 ? "…" : ""}${flat.slice(start, end)}${end < flat.length ? "…" : ""}`
+}
+
+function searchSessions(state: AppState, query: string): Command[] {
+  const needle = query.trim().toLowerCase()
+  if (needle.length < 2) return []
+  const tokens = needle.split(/\s+/).filter(Boolean)
+
+  const hits: Command[] = []
+  const sessions = [...state.sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+  for (const session of sessions) {
+    if (hits.length >= MAX_HITS) break
+    const workspace = findWorkspace(state, session.workspaceId)
+    const wname = workspace?.name ?? ""
+    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+      const message = session.messages[index]!
+      const body = searchableText(message)
+      if (!body) continue
+      const text = body.toLowerCase()
+      const inText = tokens.some((token) => text.includes(token))
+      const inAll = tokens.every((token) => `${wname} ${text}`.includes(token))
+      if (!inText || !inAll) continue
+      hits.push({
+        id: `hit:${session.id}:${message.id}`,
+        label: session.title,
+        detail: `${wname ? `${wname} · ` : ""}${snippet(body, tokens)}`,
+        icon: "fileSearch",
+        run: () => openSessionAt(session.id, message.id),
+      })
+      break
+    }
+  }
+  return hits
+}
+
 export function CommandPalette({ state }: { state: AppState }) {
   const [query, setQuery] = useState("")
   const commands = buildCommands(state)
-  const results = rank(commands, query)
+  const results = [...rank(commands, query), ...searchSessions(state, query)]
   const byId = new Map(results.map((command) => [command.id, command]))
 
   const close = () => setPalette(false)
@@ -281,7 +369,8 @@ export function CommandPalette({ state }: { state: AppState }) {
             <Icon name="search" size={14} color={color.faint} />
             <div style={fieldStyle(text.body).box}>
               <ComboboxInput
-                placeholder="Search commands, workspaces, and sessions"
+                testId="palette-input"
+                placeholder="Search commands, sessions, and messages"
                 theme={nativeTheme}
                 style={fieldStyle(text.body).text}
               />

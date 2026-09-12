@@ -1,6 +1,9 @@
+import { useRef } from "react"
+import { useGpuix, type PublicInstance } from "@gpuix/react"
+
 import { Icon, type IconName } from "../../ui/icons"
 import { color, radius, space, text } from "../../ui/theme"
-import { Label, overlayStyle } from "../../ui/ui"
+import { Kbd, Label, overlayStyle } from "../../ui/ui"
 import { MENTION_RESULTS } from "./shared"
 
 const MENTION_ROW_HEIGHT = 26
@@ -10,6 +13,9 @@ export type Suggestion = {
   label: string
   detail?: string
   icon: IconName
+  group?: string
+  run?: () => void
+  stay?: string
 }
 
 export function TokenPicker({
@@ -21,10 +27,24 @@ export function TokenPicker({
   suggestions: Suggestion[]
   empty: string
   highlighted: number
-  onPick: (value: string) => void
+  onPick: (suggestion: Suggestion) => void
 }) {
+  const renderer = useGpuix().renderer
+  const containerRef = useRef<PublicInstance | null>(null)
+  const synced = useRef("")
+
+  const signature = `${highlighted}:${suggestions.length}`
+  if (signature !== synced.current) {
+    synced.current = signature
+    setTimeout(() => {
+      const container = containerRef.current
+      if (container) renderer?.scrollToItem?.(container.id, highlighted, 0)
+    }, 0)
+  }
+
   return (
     <div
+      ref={containerRef}
       testId="mention-picker"
       style={{
         ...overlayStyle(space.xs, space.xs),
@@ -33,10 +53,25 @@ export function TokenPicker({
       }}
     >
       {suggestions.map((suggestion, index) => (
-        <div
-          key={suggestion.value}
+        <div key={`${suggestion.group ?? ""}:${suggestion.value}`}>
+          {index === 0 || suggestions[index - 1]!.group !== suggestion.group ? (
+            suggestion.group ? (
+              <div
+                style={{
+                  paddingLeft: space.md,
+                  paddingTop: index === 0 ? space.xs : space.sm,
+                  paddingBottom: 2,
+                }}
+              >
+                <Label size={text.micro} color={color.faint}>
+                  {suggestion.group}
+                </Label>
+              </div>
+            ) : null
+          ) : null}
+          <div
           testId={`mention-${suggestion.value}`}
-          onClick={() => onPick(suggestion.value)}
+          onClick={() => onPick(suggestion)}
           style={{
             display: "flex",
             flexDirection: "row",
@@ -63,6 +98,7 @@ export function TokenPicker({
           ) : (
             <div style={{ flexGrow: 1, minWidth: 0 }} />
           )}
+          </div>
         </div>
       ))}
       {suggestions.length === 0 ? (
@@ -78,7 +114,28 @@ export function TokenPicker({
             {empty}
           </Label>
         </div>
-      ) : null}
+      ) : (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: space.sm,
+            height: 22,
+            flexShrink: 0,
+            paddingLeft: space.md,
+            paddingTop: 2,
+            borderTopWidth: 1,
+            borderColor: color.border,
+          }}
+        >
+          <Kbd keys="^n" />
+          <Kbd keys="^p" />
+          <Label size={text.micro} color={color.ghost}>
+            navigate
+          </Label>
+        </div>
+      )}
     </div>
   )
 }

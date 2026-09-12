@@ -125,7 +125,7 @@ function Reasoning({ body }: { body: string }) {
 
 const COPIED_MS = 1500
 
-function copyText(value: string): void {
+export function copyText(value: string): void {
   const child = spawn("pbcopy")
   child.on("error", () => {})
   child.stdin.end(value)

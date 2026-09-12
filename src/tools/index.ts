@@ -23,7 +23,7 @@ export {
 } from "./paths"
 export { stopAllBackgroundCommands, stopBackgroundCommands } from "./shell"
 export { GATEWAY_URL, IMAGE_TYPES, MAX_IMAGE_BYTES, htmlToText } from "./web"
-export { forgetEdits, lastEdit, undoLastEdit } from "./edits"
+export { editsForFile, findEditSession, forgetEdits, lastEdit, undoEdit, undoLastEdit } from "./edits"
 export { stopBackgroundCommand } from "./shell"
 
 export function createTools(context: ToolContext): HostTool[] {

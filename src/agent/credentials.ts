@@ -8,12 +8,13 @@ import {
   MIN_ACP_PROVIDER_VERSION,
 } from "./cli"
 import { PROVIDERS, signedIn, signOut, storedSession, type ProviderId } from "./oauth"
-import { listProviderModels } from "./providers"
+import { grokLimits, listProviderModels } from "./providers"
 import { GATEWAY_URL } from "../tools"
 import {
   apiKeySource,
   getState,
   notice,
+  setLimits,
   setState,
   type Model,
 } from "../store"
@@ -65,8 +66,15 @@ export async function refreshCredentials(): Promise<void> {
     account: storedSession(provider)?.account ?? null,
   }))
   setState((current) => ({ ...current, accounts }))
+  void refreshPlanLimits()
   const models = await withProviderModels(getState().models)
   setState((current) => ({ ...current, models }))
+}
+
+export async function refreshPlanLimits(): Promise<void> {
+  if (!signedIn().includes("grok")) return
+  const limits = await grokLimits()
+  if (limits) setLimits("grok", limits)
 }
 
 export async function setUseCli(useCli: boolean): Promise<void> {

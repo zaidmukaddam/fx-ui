@@ -9,17 +9,19 @@ import {
 } from "@gpuix/react/select"
 
 import { Icon } from "../../ui/icons"
-import { color, radius, space, text } from "../../ui/theme"
+import { color, nativeTheme, radius, space, text } from "../../ui/theme"
 import { Button, Explain, Label, overlayStyle } from "../../ui/ui"
 import { forgetGrants, stopBackgroundCommand } from "../../tools"
 import { mcpGrantLabel } from "../../workspace/mcp"
 import { attachImages, chooseImages, pasteImage } from "../../workspace/images"
+import { openExternally } from "../../workspace/open"
 import {
   DEFAULT_MODEL,
   canAnswer,
   sessionModel,
   updateSession,
   useApp,
+  type BackgroundCommand,
   type PermissionMode,
   type Session,
 } from "../../store"
@@ -27,7 +29,7 @@ import { ModelChoice, keyOf } from "../models"
 
 const MONOSPACE_ADVANCE = 0.6
 
-const MODES: { value: PermissionMode; label: string; hint: string }[] = [
+export const MODES: { value: PermissionMode; label: string; hint: string }[] = [
   { value: "ask", label: "Ask", hint: "Every edit and command asks" },
   { value: "auto", label: "Auto", hint: "Edits run, commands ask" },
   {
@@ -76,7 +78,7 @@ const Chip = forwardRef<
   )
 })
 
-export function ModelPicker({ session, compact }: { session: Session; compact: boolean }) {
+export function ModelPicker({ session, maxWidth }: { session: Session; maxWidth: number }) {
   const state = useApp()
   const ready = canAnswer(state, session)
   const implied =
@@ -95,7 +97,7 @@ export function ModelPicker({ session, compact }: { session: Session; compact: b
       testId="model-picker"
       value={implied ? keyOf(implied) : null}
       label={implied?.name ?? "No model"}
-      maxWidth={compact ? 160 : 320}
+      maxWidth={maxWidth}
       size={text.micro}
       onChange={(chosen) => {
         if (!chosen) return
@@ -349,20 +351,127 @@ export function EffortPicker({ session }: { session: Session }) {
   )
 }
 
-export function BackgroundChip({ session }: { session: Session }) {
-  const running = useApp().background[session.id] ?? []
-  const live = running.filter((entry) => entry.exit === null)
-  if (live.length === 0) return null
+function elapsed(startedAt: number, endedAt: number | null): string {
+  const seconds = Math.max(0, Math.floor(((endedAt ?? Date.now()) - startedAt) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+}
+
+function logTail(log: string, lines = 12): string {
+  const tail = log.trimEnd().split("\n")
+  return tail.slice(-lines).join("\n")
+}
+
+function BackgroundRow({ entry }: { entry: BackgroundCommand }) {
+  const [open, setOpen] = useState(false)
+  const live = entry.exit === null
+  const status = live ? "running" : `exit ${entry.exit}`
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: space.xs, minWidth: 0 }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          gap: space.md,
+          minWidth: 0,
+        }}
+      >
+        <div
+          style={{
+            width: 5,
+            height: 5,
+            borderRadius: 3,
+            flexShrink: 0,
+            backgroundColor: live ? color.tertiary : entry.exit === 0 ? color.faint : color.danger,
+          }}
+        />
+        <Label grow truncate size={text.small} color={live ? color.text : color.tertiary}>
+          {entry.command}
+        </Label>
+        <Label size={text.micro} color={color.faint}>
+          {`${elapsed(entry.startedAt, entry.endedAt)} · ${status}`}
+        </Label>
+        {entry.log.trim() ? (
+          <Button
+            label="Log"
+            size="sm"
+            variant="ghost"
+            icon={open ? "chevronDown" : "chevronRight"}
+            testId={`toggle-log-${entry.handle}`}
+            onClick={() => setOpen(!open)}
+          />
+        ) : null}
+        <Button
+          label={live ? "Stop" : "Clear"}
+          size="sm"
+          variant="ghost"
+          testId={`${live ? "stop" : "clear"}-background-${entry.handle}`}
+          onClick={() => stopBackgroundCommand(entry.handle)}
+        />
+      </div>
+      {entry.urls.map((url) => (
+        <div
+          key={url}
+          testId={`open-url-${url}`}
+          onClick={() => void openExternally(url)}
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: space.sm,
+            height: 22,
+            paddingLeft: space.sm + 12 + space.md,
+            paddingRight: space.md,
+            borderRadius: radius.sm,
+            cursor: "pointer",
+            userSelect: "none",
+            minWidth: 0,
+            hover: { backgroundColor: color.hover },
+          }}
+        >
+          <Icon name="externalLink" size={11} color={color.tertiary} />
+          <Label truncate size={text.micro} color={color.tertiary}>
+            {url}
+          </Label>
+        </div>
+      ))}
+      {open && entry.log.trim() ? (
+        <div
+          style={{
+            backgroundColor: color.muted,
+            borderRadius: radius.sm,
+            padding: space.sm,
+            maxHeight: 180,
+            overflowY: "scroll",
+          }}
+        >
+          <code code={logTail(entry.log)} language="bash" theme={nativeTheme} />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+export function BackgroundChip({ session, width }: { session: Session; width: number }) {
+  const commands = useApp().background[session.id] ?? []
+  const live = commands.filter((entry) => entry.exit === null)
+  if (commands.length === 0) return null
 
   return (
     <Select value="background" onValueChange={() => {}}>
       <SelectTrigger asChild>
         <Chip testId="background-chip">
           <div
-            style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color.tertiary }}
+            style={{
+              width: 5,
+              height: 5,
+              borderRadius: 3,
+              backgroundColor: live.length > 0 ? color.tertiary : color.faint,
+            }}
           />
           <Label size={text.micro} color={color.tertiary}>
-            {`${live.length} running`}
+            {live.length > 0 ? `${live.length} running` : `${commands.length} done`}
           </Label>
         </Chip>
       </SelectTrigger>
@@ -371,30 +480,17 @@ export function BackgroundChip({ session }: { session: Session }) {
         side="top"
         align="start"
         sideOffset={8}
-        style={{ ...overlayStyle(space.md, space.md), gap: space.sm, width: 380 }}
+        style={{
+          ...overlayStyle(space.md, space.md),
+          gap: space.md,
+          width: Math.min(460, Math.max(300, width)),
+        }}
       >
-        {live.map((entry) => (
-          <div
-            key={entry.handle}
-            style={{
-              display: "flex",
-              flexDirection: "row",
-              alignItems: "center",
-              gap: space.md,
-              minWidth: 0,
-            }}
-          >
-            <Label grow truncate size={text.small} color={color.text}>
-              {entry.command}
-            </Label>
-            <Button
-              label="Stop"
-              size="sm"
-              variant="ghost"
-              testId={`stop-background-${entry.handle}`}
-              onClick={() => stopBackgroundCommand(entry.handle)}
-            />
-          </div>
+        <Label size={text.micro} color={color.ghost}>
+          PROCESSES
+        </Label>
+        {commands.map((entry) => (
+          <BackgroundRow key={entry.handle} entry={entry} />
         ))}
       </SelectContent>
     </Select>

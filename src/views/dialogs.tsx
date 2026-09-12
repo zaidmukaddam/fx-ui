@@ -1,5 +1,6 @@
 import path from "node:path"
 
+import { closeSession } from "../agent/agent"
 import { Icon } from "../ui/icons"
 import { color, space, text } from "../ui/theme"
 import { Backdrop, Button, Label, Paragraph, TextField, overlayStyle } from "../ui/ui"
@@ -181,6 +182,8 @@ export function Dialogs({ state }: { state: AppState }) {
             testId="confirm-delete-session"
             onClick={() => {
               close()
+              // Drop its agent unsaved, or a later restart writes the checkpoint back.
+              void closeSession(dialog.sessionId)
               removeSession(dialog.sessionId)
             }}
           />
@@ -207,6 +210,9 @@ export function Dialogs({ state }: { state: AppState }) {
           testId="confirm-remove-workspace"
           onClick={() => {
             close()
+            for (const session of state.sessions) {
+              if (session.workspaceId === dialog.workspaceId) void closeSession(session.id)
+            }
             removeWorkspace(dialog.workspaceId)
           }}
         />

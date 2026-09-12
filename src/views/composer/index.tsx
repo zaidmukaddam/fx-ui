@@ -1,5 +1,7 @@
 import { useState } from "react"
 
+import { estimateContext } from "../../agent/agent"
+import { useMountEffect } from "../../ui/hooks"
 import { color, columnFor, FONT, nativeTheme, radius, space, text } from "../../ui/theme"
 import { IconButton, Label, Thumbnail } from "../../ui/ui"
 import {
@@ -95,6 +97,10 @@ function Queue({ sessionId, items }: { sessionId: string; items: QueuedPrompt[] 
   )
 }
 
+/** Unsent text per session. The composer remounts when its pane opens another
+ *  session, so the draft cannot live in its state alone. */
+const drafts = new Map<string, string>()
+
 export function Composer({
   session,
   root,
@@ -109,10 +115,20 @@ export function Composer({
   onStop: () => void
 }) {
   const { column, gutter } = columnFor(paneWidth)
-  const [draft, setDraft] = useState("")
-  const picker = useTokenPicker(draft, setDraft, root)
+  const [draft, setDraftState] = useState(() => drafts.get(session.id) ?? "")
+  const setDraft = (value: string) => {
+    if (value) drafts.set(session.id, value)
+    else drafts.delete(session.id)
+    setDraftState(value)
+  }
+  const picker = useTokenPicker(draft, setDraft, session, root)
   const state = useApp()
   const running = session.status === "running"
+
+  useMountEffect(() => {
+    void estimateContext(session.id)
+  })
+
   const attached = state.attachments[session.id] ?? []
   const queued = state.queue[session.id] ?? []
   const hasContent = draft.trim().length > 0 || attached.length > 0
@@ -124,7 +140,7 @@ export function Composer({
 
   const submit = () => {
     if (picker.open && picker.suggestions.length > 0) {
-      picker.pick(picker.suggestions[picker.highlighted]!.value)
+      picker.pick(picker.suggestions[picker.highlighted]!)
       return
     }
     if (running) {
@@ -306,6 +322,8 @@ export function Composer({
           display: "flex",
           flexDirection: "row",
           alignItems: "center",
+          flexWrap: "wrap",
+          rowGap: space.xs,
           gap: space.md,
           minWidth: 0,
           paddingTop: space.md,
@@ -328,11 +346,11 @@ export function Composer({
           )}
         </div>
 
-        <BackgroundChip session={session} />
+        <BackgroundChip session={session} width={column} />
 
         <div style={{ flexGrow: 1, minWidth: 0 }} />
 
-        <ModelPicker session={session} compact={tight} />
+        <ModelPicker session={session} maxWidth={tight ? Math.max(96, column - 190) : 320} />
         {tight ? null : <FastToggle session={session} />}
         {tight ? null : <EffortPicker session={session} />}
         <ContextMeter session={session} />

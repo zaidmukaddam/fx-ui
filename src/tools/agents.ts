@@ -5,10 +5,12 @@ import {
   answerable,
   findSession,
   getState,
+  patchMessage,
   sessionModel,
   type AppState,
   type Model,
   type Session,
+  type SubagentStep,
 } from "../store"
 import { askUserQuestion } from "./approvals"
 import {
@@ -31,22 +33,27 @@ function usableModels(state: AppState): Model[] {
   return state.models.filter((model) => answerable(state, model.provider ?? null))
 }
 
-function sameModel(model: Model, want: string): boolean {
-  const needle = want.trim().toLowerCase()
-  if (!needle) return false
+function exactModel(model: Model, want: string): boolean {
+  const needle = want.toLowerCase()
+  return model.id.toLowerCase() === needle || model.name.toLowerCase() === needle
+}
+
+function looseModel(model: Model, want: string): boolean {
+  const needle = want.toLowerCase()
   const id = model.id.toLowerCase()
-  const name = model.name.toLowerCase()
-  const bare = id.replace(/^[a-z0-9-]+\//, "")
-  return id === needle || name === needle || bare === needle || id.endsWith(`/${needle}`)
+  return id.replace(/^[a-z0-9-]+\//, "") === needle || id.endsWith(`/${needle}`)
 }
 
 export function matchSubagentModel(state: AppState, want: string): Model {
   const needle = want.trim()
   if (!needle) throw new Error("Give a model id or name from this session's picker.")
   const usable = usableModels(state)
-  const exact = usable.filter((model) => sameModel(model, needle))
-  if (exact.length === 1) return exact[0]!
-  if (exact.length > 1) {
+  // An exact id or name wins, so a subscription's "grok-4.6" is not shadowed by
+  // the Gateway's "xai/grok-4.6"; a bare or suffix match is the fallback.
+  const exact = usable.filter((model) => exactModel(model, needle))
+  const matches = exact.length > 0 ? exact : usable.filter((model) => looseModel(model, needle))
+  if (matches.length === 1) return matches[0]!
+  if (matches.length > 1) {
     throw new Error(`Several models match ${needle}. Use a full id from the picker.`)
   }
   const listed = usable
@@ -212,8 +219,12 @@ export function agentTools(
                 model: optionalString(input, "model") || undefined,
                 effort: optionalString(input, "effort") || undefined,
               }),
+              // The last segment is the status: the activity card drops it and
+              // shows the state itself, keeping the task and any chosen model.
               label: (input) =>
-                [input.task, input.model, input.effort].filter(Boolean).join(" · "),
+                input.model || input.effort
+                  ? [input.task, input.model, input.effort, "running"].filter(Boolean).join(" · ")
+                  : input.task,
               run: async (input, ctx) => {
                 const parent = findSession(getState(), ctx.sessionId)
                 if (!parent) {
@@ -228,6 +239,10 @@ export function agentTools(
                     "A subagent runs on the same credential as this session, and it has none.",
                   )
                 }
+
+                const steps = new Map<string, SubagentStep>()
+                const publishSteps = () =>
+                  patchMessage(ctx.sessionId, ctx.messageId, { steps: [...steps.values()] })
 
                 const agent = (await createFxAgent({
                   ...back.options,
@@ -245,6 +260,10 @@ export function agentTools(
                     ...ctx,
                     depth: (ctx.depth ?? 0) + 1,
                     search: back.search,
+                    onStep: (step) => {
+                      steps.set(step.id, step)
+                      publishSteps()
+                    },
                   }),
                 })) as Agent
 
@@ -255,17 +274,18 @@ export function agentTools(
                     if (event.type === "text_delta") answer += event.delta
                   }
                   const result = await turn.result
-                  const used = [child.modelName ?? child.model, child.effort].filter(Boolean).join(" · ")
+                  const chosen =
+                    input.model || input.effort
+                      ? [child.modelName ?? child.model, child.effort].filter(Boolean)
+                      : []
+                  const labelled = (status: string) => [input.task, ...chosen, status].join(" · ")
                   if (!answer.trim()) {
                     return {
                       text: `The subagent finished with no answer (${result.stopReason}).`,
-                      label: `${input.task} · ${result.stopReason}${used ? ` · ${used}` : ""}`,
+                      label: labelled(result.stopReason),
                     }
                   }
-                  return {
-                    text: answer,
-                    label: `${input.task} · done${used ? ` · ${used}` : ""}`,
-                  }
+                  return { text: answer, label: labelled("done") }
                 } finally {
                   await agent.close()
                 }

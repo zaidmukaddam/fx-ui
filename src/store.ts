@@ -1,14 +1,22 @@
 import { useSyncExternalStore } from "react"
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
 import type { PlanLimits } from "./agent/providers"
-import type { GitStatus } from "./workspace/git"
+import type { DiffView, GitStatus } from "./workspace/git"
 
 export type PermissionMode = "ask" | "auto" | "full-access"
 
 export type ToolState = "running" | "ok" | "error" | "denied"
+
+export type SubagentStep = {
+  id: string
+  name: string
+  label: string
+  state: ToolState
+  output: string
+}
 
 export type Message =
   | { id: string; kind: "user"; at: number; text: string; images?: string[] }
@@ -28,6 +36,7 @@ export type Message =
       label: string
       state: ToolState
       output: string
+      steps?: SubagentStep[]
       patch?: string
       language?: string
       endedAt?: number
@@ -88,6 +97,7 @@ export type Session = {
   messages: Message[]
   context: Context
   grants: string[]
+  forkedFrom?: string
 }
 
 export type Workspace = {
@@ -97,7 +107,8 @@ export type Workspace = {
   createdAt: number
 }
 
-export type Pane = { sessionId: string | null }
+export type PaneView = { kind: "changes"; workspaceId: string }
+export type Pane = { sessionId: string | null; view?: PaneView }
 
 export type Account = { provider: "grok" | "codex"; account: string | null }
 
@@ -105,6 +116,10 @@ export type BackgroundCommand = {
   handle: string
   command: string
   exit: number | null
+  startedAt: number
+  endedAt: number | null
+  log: string
+  urls: string[]
 }
 
 export type QueuedPrompt = {
@@ -117,6 +132,20 @@ export type Chosen = {
   id: string
   provider: "grok" | "codex" | null
   name: string | null
+}
+
+export type UsageRecord = {
+  id: string
+  at: number
+  sessionId: string
+  sessionTitle: string
+  model: string | null
+  modelName: string | null
+  provider: "grok" | "codex" | null
+  input: number
+  output: number
+  cached: number
+  reasoning: number
 }
 
 export type Model = {
@@ -153,6 +182,9 @@ export type UpdateStatus =
   | { stage: "ready"; version: string; appPath: string }
   | { stage: "error"; message: string }
 
+/** A pending request to scroll a transcript to a specific message. */
+export type Reveal = { sessionId: string; messageId: string }
+
 export type AppState = {
   workspaces: Workspace[]
   sessions: Session[]
@@ -170,10 +202,13 @@ export type AppState = {
   attachments: Record<string, string[]>
   queue: Record<string, QueuedPrompt[]>
   git: Record<string, GitStatus | null>
+  diffView: Record<string, DiffView>
   limits: Record<string, PlanLimits>
+  usage: UsageRecord[]
   settingsOpen: boolean
   overlay: Overlay | null
   update: UpdateStatus
+  reveal: Reveal | null
 }
 
 function home(): string {
@@ -191,6 +226,19 @@ export const DIR = home()
 export const HOME_DIR = process.env.FX_UI_HOME ? DIR : os.homedir()
 const STATE_FILE = path.join(DIR, "state.json")
 export const CHECKPOINT_DIR = path.join(DIR, "checkpoints")
+
+export function checkpointFile(sessionId: string): string {
+  return path.join(CHECKPOINT_DIR, `${sessionId}.bin`)
+}
+
+/** Nothing reads a removed session's checkpoint again, so it would only pile up. */
+function forgetCheckpoint(sessionId: string): void {
+  try {
+    rmSync(checkpointFile(sessionId), { force: true })
+  } catch (error) {
+    console.error("[fx] could not delete the session checkpoint:", error)
+  }
+}
 export const ATTACHMENT_DIR = path.join(DIR, "attachments")
 
 const MAX_PERSISTED_MESSAGES = 400
@@ -225,10 +273,13 @@ function emptyState(): AppState {
     attachments: {},
     queue: {},
     git: {},
+    diffView: {},
     limits: {},
+    usage: [],
     settingsOpen: false,
     overlay: null,
     update: { stage: "idle" },
+    reveal: null,
   }
 }
 
@@ -244,12 +295,24 @@ const PERSISTED = [
   "useCli",
   "models",
   "defaultModel",
+  "usage",
 ] as const satisfies readonly (keyof AppState)[]
 
 const persisted = (source: Partial<AppState>): Partial<AppState> =>
   Object.fromEntries(
     PERSISTED.filter((key) => key in source).map((key) => [key, source[key]]),
   ) as Partial<AppState>
+
+function isSubagentStep(step: unknown): step is SubagentStep {
+  if (typeof step !== "object" || step === null) return false
+  const value = step as Partial<SubagentStep>
+  return (
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.label === "string" &&
+    typeof value.output === "string"
+  )
+}
 
 function load(): AppState {
   const base = emptyState()
@@ -269,13 +332,19 @@ function load(): AppState {
     provider: session.provider ?? null,
     effort: session.effort ?? null,
     fast: session.fast ?? false,
-    messages: (session.messages ?? []).map((message) =>
-      message.kind === "approval" && message.decision === "pending"
-        ? { ...message, decision: "denied" as const }
-        : message.kind === "question" && message.answer === null
-          ? { ...message, answer: "" }
-          : message,
-    ),
+    messages: (session.messages ?? []).map((message) => {
+      if (message.kind === "approval" && message.decision === "pending") {
+        return { ...message, decision: "denied" as const }
+      }
+      if (message.kind === "question" && message.answer === null) {
+        return { ...message, answer: "" }
+      }
+      if (message.kind === "tool" && message.steps) {
+        const steps = message.steps.filter(isSubagentStep)
+        return { ...message, steps: steps.length > 0 ? steps : undefined }
+      }
+      return message
+    }),
   }))
   return {
     ...base,
@@ -573,7 +642,9 @@ export function startSession(workspaceId: string, pane?: number): Session {
       sessions: [created, ...current.sessions],
       activeWorkspaceId: workspaceId,
       focusedPane: index,
-      panes: current.panes.map((p, i) => (i === index ? { sessionId: created.id } : p)),
+      panes: current.panes.map((p, i) =>
+        i === index ? { sessionId: created.id } : p,
+      ),
       settingsOpen: false,
     })
   })
@@ -596,6 +667,72 @@ export function openSession(sessionId: string, pane?: number): void {
   })
 }
 
+export function openSessionAt(sessionId: string, messageId: string, pane?: number): void {
+  openSession(sessionId, pane)
+  setState((current) => ({ ...current, reveal: { sessionId, messageId } }))
+}
+
+/** Picks a pane to drop new content into: an empty pane first, otherwise any
+ *  pane other than `avoid` (typically the pane the new content originated
+ *  from), so it never silently overwrites the pane you're acting on. */
+function targetPane(panes: Pane[], avoid?: number): number {
+  const empty = panes.findIndex((pane, i) => i !== avoid && !pane.sessionId && !pane.view)
+  if (empty >= 0) return empty
+  const other = panes.findIndex((_, i) => i !== avoid)
+  return other >= 0 ? other : 0
+}
+
+export function copySession(sessionId: string): Session | null {
+  let created: Session | null = null
+  setState((current) => {
+    const source = findSession(current, sessionId)
+    if (!source) return current
+    created = {
+      ...source,
+      id: newId(),
+      title: `${source.title} (fork)`,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      status: "idle",
+      compacting: false,
+      messages: source.messages.map((message) =>
+        message.kind === "approval" && message.decision === "pending"
+          ? { ...message, decision: "denied" as const }
+          : message.kind === "question" && message.answer === null
+            ? { ...message, answer: "" }
+            : message.kind === "tool" && message.state === "running"
+              ? {
+                  ...message,
+                  state: "error" as const,
+                  output: message.output || "Stopped when the session was forked.",
+                  endedAt: Date.now(),
+                }
+              : message,
+      ),
+      grants: [...source.grants],
+      forkedFrom: sessionId,
+    }
+    const sourceIndex = current.panes.findIndex((pane) => pane.sessionId === sessionId)
+    const panes =
+      current.panes.length > 1
+        ? current.panes
+        : [...current.panes, { sessionId: null }]
+    const index = targetPane(panes, sourceIndex)
+    return dropUnsent({
+      ...current,
+      sessions: [created, ...current.sessions],
+      focusedPane: index,
+      panes: panes.map((pane, i) => (i === index ? { sessionId: created!.id } : pane)),
+      settingsOpen: false,
+    })
+  })
+  return created
+}
+
+export function clearReveal(): void {
+  setState((current) => (current.reveal ? { ...current, reveal: null } : current))
+}
+
 export function removeSession(sessionId: string): void {
   setState((current) => ({
     ...current,
@@ -605,9 +742,13 @@ export function removeSession(sessionId: string): void {
     ),
     queue: omitQueue(current.queue, sessionId),
   }))
+  forgetCheckpoint(sessionId)
 }
 
 export function removeWorkspace(workspaceId: string): void {
+  const removed = getState()
+    .sessions.filter((session) => session.workspaceId === workspaceId)
+    .map((session) => session.id)
   setState((current) => {
     const sessions = current.sessions.filter(
       (session) => session.workspaceId !== workspaceId,
@@ -624,23 +765,28 @@ export function removeWorkspace(workspaceId: string): void {
         current.activeWorkspaceId === workspaceId
           ? (workspaces[0]?.id ?? null)
           : current.activeWorkspaceId,
-      panes: current.panes.map((pane) =>
-        pane.sessionId && live.has(pane.sessionId)
-          ? pane
-          : { sessionId: null },
-      ),
+      panes: current.panes.map((pane) => {
+        if (pane.view) {
+          return pane.view.workspaceId === workspaceId ? { sessionId: null } : pane
+        }
+        return pane.sessionId && live.has(pane.sessionId) ? pane : { sessionId: null }
+      }),
       queue: Object.fromEntries(
         Object.entries(current.queue).filter(([id]) => live.has(id)),
       ),
     }
   })
+  for (const sessionId of removed) forgetCheckpoint(sessionId)
 }
 
 export function setSplit(open: boolean): void {
   setState((current) => {
     if (open === current.panes.length > 1) return current
     if (!open) {
-      const kept = current.panes[current.focusedPane] ?? current.panes[0]
+      const focused = current.panes[current.focusedPane] ?? current.panes[0]
+      const kept = focused.sessionId
+        ? focused
+        : (current.panes.find((pane) => pane.sessionId) ?? focused)
       return dropUnsent({ ...current, panes: [kept], focusedPane: 0 })
     }
     return {
@@ -649,6 +795,57 @@ export function setSplit(open: boolean): void {
       focusedPane: 1,
     }
   })
+}
+
+export function openChangesPane(workspaceId: string): void {
+  setState((current) => {
+    const existing = current.panes.findIndex(
+      (pane) => pane.view?.kind === "changes" && pane.view.workspaceId === workspaceId,
+    )
+    if (existing >= 0) {
+      return { ...current, focusedPane: existing, settingsOpen: false }
+    }
+    const view: PaneView = { kind: "changes", workspaceId }
+    const panes =
+      current.panes.length > 1
+        ? current.panes
+        : [...current.panes, { sessionId: null }]
+    const index = targetPane(panes, current.focusedPane)
+    return dropUnsent({
+      ...current,
+      focusedPane: index,
+      settingsOpen: false,
+      panes: panes.map((pane, i) => (i === index ? { sessionId: null, view } : pane)),
+    })
+  })
+}
+
+export function closeChangesPane(workspaceId: string): void {
+  setState((current) => {
+    const index = current.panes.findIndex(
+      (pane) => pane.view?.kind === "changes" && pane.view.workspaceId === workspaceId,
+    )
+    if (index < 0) return current
+    const diffView = { ...current.diffView }
+    delete diffView[workspaceId]
+    return {
+      ...current,
+      diffView,
+      panes:
+        current.panes.length > 1
+          ? current.panes.filter((_, i) => i !== index)
+          : [{ sessionId: current.panes[index]!.sessionId }],
+      focusedPane: 0,
+    }
+  })
+}
+
+export function toggleChanges(workspaceId: string): void {
+  const open = getState().panes.some(
+    (pane) => pane.view?.kind === "changes" && pane.view.workspaceId === workspaceId,
+  )
+  if (open) closeChangesPane(workspaceId)
+  else openChangesPane(workspaceId)
 }
 
 export function setOverlay(overlay: Overlay | null): void {
@@ -680,6 +877,37 @@ export function setBackground(sessionId: string, running: BackgroundCommand[]): 
 
 export function setLimits(provider: string, limits: PlanLimits): void {
   setState((current) => ({ ...current, limits: { ...current.limits, [provider]: limits } }))
+}
+
+const MAX_USAGE_RECORDS = 2_000
+
+export function recordUsage(
+  sessionId: string,
+  usage: {
+    inputTokens?: number
+    outputTokens?: number
+    cacheReadTokens?: number
+    reasoningTokens?: number
+  },
+): void {
+  const session = findSession(getState(), sessionId)
+  const record: UsageRecord = {
+    id: newId(),
+    at: Date.now(),
+    sessionId,
+    sessionTitle: session?.title ?? "Untitled session",
+    model: session?.model ?? null,
+    modelName: session?.modelName ?? session?.model ?? null,
+    provider: session?.provider ?? null,
+    input: usage.inputTokens ?? 0,
+    output: usage.outputTokens ?? 0,
+    cached: usage.cacheReadTokens ?? 0,
+    reasoning: usage.reasoningTokens ?? 0,
+  }
+  setState((current) => ({
+    ...current,
+    usage: [...current.usage, record].slice(-MAX_USAGE_RECORDS),
+  }))
 }
 
 export function setUpdate(status: UpdateStatus): void {

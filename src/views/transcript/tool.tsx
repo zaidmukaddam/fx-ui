@@ -1,9 +1,11 @@
-import { useContext, useState } from "react"
+import { useContext, useRef, useState } from "react"
+import { useGpuix, type PublicInstance } from "@gpuix/react"
+import type { EventPayload } from "@gpuix/native"
 
 import { Icon, type IconName } from "../../ui/icons"
 import { color, nativeTheme, radius, space, text } from "../../ui/theme"
 import { Label } from "../../ui/ui"
-import { type Message } from "../../store"
+import { type Message, type SubagentStep } from "../../store"
 import { COLLAPSED_LINES, GUTTER, Gutter, HoldTail, Row } from "./shared"
 
 const TOOL_ICONS: Record<string, IconName> = {
@@ -53,7 +55,264 @@ function outcome(message: Extract<Message, { kind: "tool" }>): {
   }
 }
 
+function toolSummary(steps: SubagentStep[] | undefined): string {
+  if (!steps || steps.length === 0) return ""
+  const counts = new Map<string, number>()
+  for (const step of steps) counts.set(step.name, (counts.get(step.name) ?? 0) + 1)
+  return [...counts.entries()]
+    .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
+    .join(" · ")
+}
+
+function stepTone(state: SubagentStep["state"]): string {
+  if (state === "error") return color.danger
+  if (state === "denied") return color.tertiary
+  return color.faint
+}
+
+function SubagentStepRow({
+  step,
+  rows,
+  onMoveFocus,
+}: {
+  step: SubagentStep
+  rows: React.RefObject<Map<string, PublicInstance>>
+  onMoveFocus: (from: string, delta: number) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const holdTail = useContext(HoldTail)
+  const hasBody = Boolean(step.output.trim())
+  const tone = stepTone(step.state)
+
+  const toggle = () => {
+    setOpen((value) => !value)
+    holdTail()
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+      <div
+        testId={`subagent-step-${step.id}`}
+        ref={(node: PublicInstance | null) => {
+          if (node) rows.current.set(step.id, node)
+          else rows.current.delete(step.id)
+        }}
+        tabIndex={0}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        onClick={hasBody ? toggle : undefined}
+        onKeyDown={(event: EventPayload) => {
+          if (event.key === "enter" || event.key === "space") {
+            if (hasBody) toggle()
+            return
+          }
+          if (event.key === "down") onMoveFocus(step.id, 1)
+          else if (event.key === "up") onMoveFocus(step.id, -1)
+        }}
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          gap: space.sm,
+          height: 22,
+          paddingLeft: space.sm + 12 + space.md,
+          paddingRight: space.md,
+          borderRadius: radius.sm,
+          cursor: hasBody ? "pointer" : "default",
+          userSelect: "none",
+          backgroundColor: focused ? color.hover : undefined,
+          hover: hasBody ? { backgroundColor: color.hover } : undefined,
+        }}
+      >
+        <Icon name={TOOL_ICONS[step.name] ?? "box"} size={11} color={color.ghost} />
+        <Label size={text.micro} color={color.tertiary}>
+          {step.name}
+        </Label>
+        <Label grow truncate size={text.micro} color={color.faint}>
+          {step.label !== step.name ? step.label : ""}
+        </Label>
+        {step.state === "running" ? (
+          <div style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color.text }} />
+        ) : (
+          <Icon name={step.state === "error" ? "circleAlert" : "check"} size={10} color={tone} />
+        )}
+      </div>
+      {open ? (
+        <div
+          style={{
+            paddingLeft: space.sm + 12 + space.lg,
+            paddingRight: space.md,
+            paddingBottom: space.xs,
+            maxHeight: 160,
+            overflowY: "scroll",
+          }}
+        >
+          <code code={step.output || "(no output)"} language="text" theme={nativeTheme} />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function SubagentCard({ message }: { message: Extract<Message, { kind: "tool" }> }) {
+  const [expanded, setExpanded] = useState(false)
+  const holdTail = useContext(HoldTail)
+  const renderer = useGpuix().renderer
+  const rows = useRef<Map<string, PublicInstance>>(new Map())
+  const running = message.state === "running"
+  const steps = message.steps ?? []
+  const summary = toolSummary(steps)
+  const elapsed = duration(message.at, message.endedAt ?? Date.now())
+  const result = outcome(message)
+
+  const moveFocus = (from: string, delta: number) => {
+    const at = steps.findIndex((step) => step.id === from)
+    const next = steps[at + delta]
+    if (!next) return
+    const node = rows.current.get(next.id)
+    if (node) renderer?.focusElement?.(node.id)
+  }
+
+  return (
+    <Row>
+      <div
+        testId={`tool-${message.id}`}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          minWidth: 0,
+          marginRight: space.md,
+          borderWidth: 1,
+          borderColor: color.border,
+          borderRadius: radius.md,
+          backgroundColor: color.raised,
+        }}
+      >
+        <div
+          onClick={() => {
+            setExpanded(!expanded)
+            holdTail()
+          }}
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: space.md,
+            height: 28,
+            paddingLeft: space.sm,
+            paddingRight: space.md,
+            cursor: "pointer",
+            userSelect: "none",
+            hover: { backgroundColor: color.hover },
+          }}
+        >
+          <Icon
+            name="bot"
+            size={12}
+            color={message.state === "error" ? color.danger : color.secondary}
+          />
+          <Label size={text.small} color={color.secondary}>
+            subagent
+          </Label>
+          <Label grow truncate size={text.small} color={color.text}>
+            {message.label.replace(/ · [^·]+$/, "")}
+          </Label>
+          <Label size={text.micro} color={result.tone}>
+            {`${elapsed}${result.label && result.label !== elapsed ? ` · ${result.label}` : ""}`}
+          </Label>
+          <Icon
+            name={expanded ? "chevronDown" : "chevronRight"}
+            size={12}
+            color={color.ghost}
+          />
+        </div>
+
+        {!expanded && summary ? (
+          <div
+            style={{
+              display: "flex",
+              paddingLeft: space.sm + 12 + space.md,
+              paddingRight: space.md,
+              paddingBottom: space.xs,
+            }}
+          >
+            <Label truncate size={text.micro} color={color.faint}>
+              {summary}
+            </Label>
+          </div>
+        ) : null}
+
+        {expanded ? (
+          <div
+            style={{
+              minWidth: 0,
+              paddingTop: space.xs,
+              paddingBottom: space.sm,
+              borderTopWidth: 1,
+              borderColor: color.border,
+            }}
+          >
+            {steps.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {steps.map((step) => (
+                  <SubagentStepRow
+                    key={step.id}
+                    step={step}
+                    rows={rows}
+                    onMoveFocus={moveFocus}
+                  />
+                ))}
+              </div>
+            ) : running ? (
+              <div style={{ paddingLeft: space.md, paddingRight: space.md }}>
+                <Label size={text.small} color={color.tertiary}>
+                  Starting…
+                </Label>
+              </div>
+            ) : null}
+
+            <div
+              style={{
+                minWidth: 0,
+                paddingLeft: space.md,
+                paddingRight: space.md,
+                paddingTop: steps.length > 0 ? space.sm : 0,
+              }}
+            >
+              {running && steps.length === 0 ? null : running ? (
+                <Label size={text.small} color={color.tertiary}>
+                  Working…
+                </Label>
+              ) : message.output ? (
+                <markdown
+                  source={message.output}
+                  theme={nativeTheme}
+                  style={{ color: color.text }}
+                />
+              ) : (
+                <Label size={text.small} color={color.tertiary}>
+                  No answer returned.
+                </Label>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </Row>
+  )
+}
+
 export function ToolResult({
+  message,
+}: {
+  message: Extract<Message, { kind: "tool" }>
+}) {
+  if (message.name === "subagent") return <SubagentCard message={message} />
+  return <ToolRow message={message} />
+}
+
+function ToolRow({
   message,
 }: {
   message: Extract<Message, { kind: "tool" }>
