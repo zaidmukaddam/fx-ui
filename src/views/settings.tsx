@@ -8,13 +8,18 @@ import { useMountEffect } from "../ui/hooks"
 import {
   addMcpServer,
   beginServerSignIn,
+  duplicateMcpServer,
+  formatMcpFields,
   listMcpServers,
   MCP_CONFIG_FILE,
+  nextMcpName,
+  parseMcpFields,
   readWorkspaceBindings,
   removeMcpServer,
   setConnectionUsed,
   setMcpDisabled,
   signOutOfServer,
+  updateMcpServer,
 } from "../workspace/mcp"
 import {
   beginSignIn,
@@ -45,6 +50,8 @@ import { expandMcpValue } from "../workspace/mcp/variables"
 import {
   color,
   columnFor,
+  FONT,
+  nativeTheme,
   PANE_PADDING,
   radius,
   space,
@@ -237,6 +244,87 @@ function ApiKeyRow({ state }: { state: AppState }) {
   )
 }
 
+function MultilineField({
+  value,
+  placeholder,
+  testId,
+  onChange,
+  onSubmit,
+}: {
+  value: string
+  placeholder: string
+  testId: string
+  onChange: (value: string) => void
+  onSubmit: () => void
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "row",
+        paddingTop: space.sm,
+        paddingBottom: space.sm,
+        paddingLeft: space.lg,
+        paddingRight: space.lg,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: color.border,
+        backgroundColor: color.background,
+        minWidth: 0,
+      }}
+    >
+      <textarea
+        testId={testId}
+        value={value}
+        placeholder={placeholder}
+        minRows={3}
+        maxRows={8}
+        theme={nativeTheme}
+        onChange={(event) => onChange(event.value ?? "")}
+        onSubmit={onSubmit}
+        style={{
+          flexGrow: 1,
+          minWidth: 0,
+          fontSize: text.small,
+          fontFamily: FONT,
+          color: color.text,
+        }}
+      />
+    </div>
+  )
+}
+
+function mcpRowDetail(
+  server: Server,
+  workspacePath: string | null,
+  error: string | null,
+  busy: boolean,
+): { text: string; danger: boolean } {
+  if (error) return { text: error, danger: true }
+  if (busy) return { text: "Waiting for the browser to finish the sign-in.", danger: false }
+  if (server.disabled) {
+    return { text: "Disabled. This server will not connect until enabled.", danger: false }
+  }
+  if (workspacePath && !server.used) {
+    return { text: "Not used in this workspace.", danger: false }
+  }
+  if (server.needsSignIn) return { text: "Needs you to sign in.", danger: false }
+  if (server.problem) return { text: server.problem, danger: true }
+  let host = "Remote"
+  try {
+    if (server.url) host = new URL(server.url).host
+  } catch {}
+  if (server.url) {
+    return {
+      text: server.signedIn
+        ? `${host} · signed in · ${server.tools} tools`
+        : `${host} · ${server.tools} tools. Sign in if this server requires OAuth.`,
+      danger: false,
+    }
+  }
+  return { text: `Local · ${server.tools} tools`, danger: false }
+}
+
 function AddMcpServerRow({
   workspacePath,
   onChanged,
@@ -331,19 +419,32 @@ function McpServerRow({
   server,
   running,
   workspacePath,
+  servers,
   onChanged,
 }: {
   server: Server
   running: boolean
   workspacePath: string | null
+  servers: Server[]
   onChanged: () => void
 }) {
   const [busy, setBusy] = useState(false)
+  const [signing, setSigning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [headers, setHeaders] = useState("")
+  const [env, setEnv] = useState("")
+  const [envFile, setEnvFile] = useState("")
+  const [cwd, setCwd] = useState("")
+  const remote = Boolean(server.url)
+  const status = mcpRowDetail(server, workspacePath, error, signing)
+
+  const blocked = busy || running
 
   const signIn = async () => {
     setError(null)
     setBusy(true)
+    setSigning(true)
     try {
       const flow = await beginServerSignIn(server.id, expandMcpValue(server.url!), null, openExternally)
       await flow.completed
@@ -353,96 +454,206 @@ function McpServerRow({
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
       setBusy(false)
+      setSigning(false)
     }
   }
 
-  let host = "Remote"
-  try {
-    if (server.url) host = new URL(server.url).host
-  } catch {}
-  const detail = error
-    ? error
-    : busy
-      ? "Waiting for the browser to finish the sign-in."
-      : server.disabled
-        ? "Disabled. This server will not connect until enabled."
-      : workspacePath && !server.used
-        ? "Not used in this workspace."
-      : server.url
-        ? server.signedIn
-          ? `${host} · signed in · ${server.tools} tools`
-          : `${host} · ${server.tools} tools. Sign in if this server requires OAuth.`
-        : `Local · ${server.tools} tools`
+  const startEdit = () => {
+    setError(null)
+    setHeaders(formatMcpFields(server.headers))
+    setEnv(formatMcpFields(server.env))
+    setEnvFile(server.envFile ?? "")
+    setCwd(server.cwd ?? "")
+    setEditing(true)
+  }
+
+  const saveEdit = () => {
+    if (blocked) return
+    setBusy(true)
+    setError(null)
+    try {
+      if (remote) {
+        updateMcpServer(server.name, { headers: parseMcpFields(headers) })
+      } else {
+        updateMcpServer(server.name, {
+          env: parseMcpFields(env),
+          envFile: envFile.trim() || null,
+          cwd: cwd.trim() || null,
+        })
+      }
+      setEditing(false)
+      void reloadSkills().then(onChanged).finally(() => setBusy(false))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+      setBusy(false)
+    }
+  }
+
+  const duplicate = () => {
+    if (blocked) return
+    setBusy(true)
+    setError(null)
+    try {
+      const name = duplicateMcpServer(server.name, nextMcpName(server.name, servers.map((entry) => entry.name)))
+      if (workspacePath && readWorkspaceBindings()[workspacePath]) {
+        const added = listMcpServers().find((entry) => entry.name === name)
+        if (added) setConnectionUsed(workspacePath, added.id, true)
+      }
+      void reloadSkills().then(onChanged).finally(() => setBusy(false))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+      setBusy(false)
+    }
+  }
 
   return (
-    <Row title={server.name} detail={detail}>
-      {workspacePath ? (
-        <Button
-          label={server.used ? "Ignore here" : "Use here"}
-          size="sm"
-          variant="ghost"
-          disabled={busy || running}
-          testId={`mcp-use-${server.name}`}
-          onClick={() => {
-            if (busy || getState().sessions.some((session) => session.status === "running")) return
-            setBusy(true)
-            setError(null)
-            try {
-              setConnectionUsed(workspacePath, server.id, !server.used)
-              void reloadSkills().then(onChanged).finally(() => setBusy(false))
-            } catch (reason) {
-              setError(reason instanceof Error ? reason.message : String(reason))
-              setBusy(false)
-            }
-          }}
-        />
-      ) : null}
-      {server.url && !server.disabled ? (
-        <Button
-          label={server.signedIn ? "Sign out" : "Sign in"}
-          size="sm"
-          disabled={busy}
-          testId={`mcp-${server.signedIn ? "signout" : "signin"}-${server.name}`}
-          onClick={() => {
-            if (!server.signedIn) {
-              void signIn()
-              return
-            }
-            signOutOfServer(server.id, server.name)
-            void reloadSkills().then(onChanged)
-          }}
-        />
-      ) : null}
-      <Button label={server.disabled ? "Enable" : "Disable"} size="sm" variant="ghost" disabled={busy || running}
-        testId={`mcp-toggle-${server.name}`}
-        onClick={() => {
-          if (busy || getState().sessions.some((session) => session.status === "running")) return
-          setBusy(true)
-          setError(null)
-          void (async () => {
-            try {
-              setMcpDisabled(server.name, !server.disabled)
-              await reloadSkills()
-              onChanged()
-            } catch (reason) {
-              setError(reason instanceof Error ? reason.message : String(reason))
-            } finally {
-              setBusy(false)
-            }
-          })()
-        }} />
-      <Button
-        label="Remove"
-        variant="ghost"
-        size="sm"
-        disabled={busy}
-        testId={`mcp-remove-${server.name}`}
-        onClick={() => {
-          signOutOfServer(server.id, server.name)
-          removeMcpServer(server.name)
-          void reloadSkills().then(onChanged)
-        }}
-      />
+    <Row
+      title={server.name}
+      detail={status.text}
+      danger={status.danger}
+      expanded={
+        editing ? (
+          remote ? (
+            <MultilineField
+              testId={`mcp-headers-${server.name}`}
+              value={headers}
+              placeholder={"Authorization=Bearer ${env:TOKEN}"}
+              onChange={setHeaders}
+              onSubmit={saveEdit}
+            />
+          ) : (
+            <>
+              <MultilineField
+                testId={`mcp-env-${server.name}`}
+                value={env}
+                placeholder={"PROJECT_REF=your-project"}
+                onChange={setEnv}
+                onSubmit={saveEdit}
+              />
+              <TextField
+                testId={`mcp-envfile-${server.name}`}
+                value={envFile}
+                placeholder="Path to an env file, optional"
+                onChange={setEnvFile}
+                onSubmit={saveEdit}
+              />
+              <TextField
+                testId={`mcp-cwd-${server.name}`}
+                value={cwd}
+                placeholder="Working directory, optional"
+                onChange={setCwd}
+                onSubmit={saveEdit}
+              />
+            </>
+          )
+        ) : null
+      }
+    >
+      {editing ? (
+        <>
+          <Button label="Cancel" variant="ghost" size="sm" disabled={busy} onClick={() => setEditing(false)} />
+          <Button
+            label="Save"
+            variant="primary"
+            size="sm"
+            hint="↩"
+            testId={`mcp-save-${server.name}`}
+            disabled={blocked}
+            onClick={saveEdit}
+          />
+        </>
+      ) : (
+        <>
+          {workspacePath ? (
+            <Button
+              label={server.used ? "Ignore here" : "Use here"}
+              size="sm"
+              variant="ghost"
+              disabled={blocked}
+              testId={`mcp-use-${server.name}`}
+              onClick={() => {
+                if (blocked || getState().sessions.some((session) => session.status === "running")) return
+                setBusy(true)
+                setError(null)
+                try {
+                  setConnectionUsed(workspacePath, server.id, !server.used)
+                  void reloadSkills().then(onChanged).finally(() => setBusy(false))
+                } catch (reason) {
+                  setError(reason instanceof Error ? reason.message : String(reason))
+                  setBusy(false)
+                }
+              }}
+            />
+          ) : null}
+          {server.url && !server.disabled ? (
+            <Button
+              label={server.signedIn ? "Sign out" : "Sign in"}
+              size="sm"
+              disabled={busy}
+              testId={`mcp-${server.signedIn ? "signout" : "signin"}-${server.name}`}
+              onClick={() => {
+                if (!server.signedIn) {
+                  void signIn()
+                  return
+                }
+                signOutOfServer(server.id, server.name)
+                void reloadSkills().then(onChanged)
+              }}
+            />
+          ) : null}
+          <Button
+            label="Edit"
+            size="sm"
+            variant="ghost"
+            disabled={blocked}
+            testId={`mcp-edit-${server.name}`}
+            onClick={startEdit}
+          />
+          <Button
+            label="Duplicate"
+            size="sm"
+            variant="ghost"
+            disabled={blocked}
+            testId={`mcp-duplicate-${server.name}`}
+            onClick={duplicate}
+          />
+          <Button
+            label={server.disabled ? "Enable" : "Disable"}
+            size="sm"
+            variant="ghost"
+            disabled={blocked}
+            testId={`mcp-toggle-${server.name}`}
+            onClick={() => {
+              if (blocked || getState().sessions.some((session) => session.status === "running")) return
+              setBusy(true)
+              setError(null)
+              void (async () => {
+                try {
+                  setMcpDisabled(server.name, !server.disabled)
+                  await reloadSkills()
+                  onChanged()
+                } catch (reason) {
+                  setError(reason instanceof Error ? reason.message : String(reason))
+                } finally {
+                  setBusy(false)
+                }
+              })()
+            }}
+          />
+          <Button
+            label="Remove"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            testId={`mcp-remove-${server.name}`}
+            onClick={() => {
+              signOutOfServer(server.id, server.name)
+              removeMcpServer(server.name)
+              void reloadSkills().then(onChanged)
+            }}
+          />
+        </>
+      )}
     </Row>
   )
 }
@@ -910,9 +1121,9 @@ export function Settings({ state }: { state: AppState }) {
                 ? running
                   ? "Wait for running turns to finish before importing, enabling, or changing which servers this workspace uses."
                   : workspace
-                    ? "Saved in ~/.fx-ui/mcp.json. Ignore here keeps a connection out of this workspace. Tokens stay in your home folder, not in the repo."
+                    ? "Saved in ~/.fx-ui/mcp.json. Ignore here keeps a connection out of this workspace. Edit env or headers here; tokens stay in your home folder, not in the repo."
                     : "Saved in ~/.fx-ui/mcp.json. Open a workspace to choose which connections it uses."
-                : "None configured. Add them to ~/.fx-ui/mcp.json: a `command` for a local one, a `url` for a remote one."
+                : "None configured. Add a URL or a command, then Edit for env and headers."
           }
           expanded={importing ? <McpImport onClose={() => setImporting(false)} onChanged={changed} /> : null}
         >
@@ -922,6 +1133,7 @@ export function Settings({ state }: { state: AppState }) {
           <McpServerRow
             key={server.id}
             server={server}
+            servers={loaded?.servers ?? []}
             running={running}
             workspacePath={workspace?.path ?? null}
             onChanged={changed}

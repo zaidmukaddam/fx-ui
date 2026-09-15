@@ -304,3 +304,99 @@ export function setMcpDisabled(name: string, disabled: boolean, file = MCP_CONFI
   servers[name] = { ...entry, disabled }
   writeMcpDocument({ ...document, mcpServers: servers }, file)
 }
+
+const FIELD_KEY = /^[A-Za-z0-9_.-]+$/
+
+export function parseMcpFields(text: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const raw of text.split("\n")) {
+    const line = raw.trim()
+    if (!line) continue
+    const at = line.indexOf("=")
+    if (at < 1) throw new Error("Each line must be NAME=value.")
+    const key = line.slice(0, at).trim()
+    if (!FIELD_KEY.test(key)) throw new Error(`${key} is not a valid name.`)
+    out[key] = line.slice(at + 1)
+  }
+  return out
+}
+
+export function formatMcpFields(fields: Record<string, string> | undefined): string {
+  return Object.entries(fields ?? {})
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n")
+}
+
+function rawServer(name: string, file: string): Record<string, unknown> {
+  const entry = serversOf(readMcpDocument(file))[name]
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error(`${name} is not configured.`)
+  }
+  return { ...(entry as Record<string, unknown>) }
+}
+
+function writeRawServer(name: string, entry: Record<string, unknown>, file: string): void {
+  const document = readMcpDocument(file)
+  writeMcpDocument(
+    { ...document, mcpServers: { ...serversOf(document), [name]: entry } },
+    file,
+  )
+}
+
+function setOptional(entry: Record<string, unknown>, key: string, value: Record<string, string> | string | null | undefined): void {
+  if (value === undefined) return
+  if (value === null || value === "" || (typeof value === "object" && Object.keys(value).length === 0)) {
+    delete entry[key]
+    return
+  }
+  entry[key] = value
+}
+
+export function updateMcpServer(
+  name: string,
+  patch: {
+    headers?: Record<string, string>
+    env?: Record<string, string>
+    envFile?: string | null
+    cwd?: string | null
+  },
+  file = MCP_CONFIG_FILE,
+): void {
+  const entry = rawServer(name, file)
+  if (typeof entry.url === "string") {
+    setOptional(entry, "headers", patch.headers)
+  } else {
+    setOptional(entry, "env", patch.env)
+    setOptional(entry, "envFile", patch.envFile)
+    setOptional(entry, "cwd", patch.cwd)
+  }
+  writeRawServer(name, entry, file)
+}
+
+export function duplicateMcpServer(name: string, as: string, file = MCP_CONFIG_FILE): string {
+  const trimmed = as.trim()
+  if (!NAME.test(trimmed)) {
+    throw new Error("A name may only hold letters, digits, `_` and `-`.")
+  }
+  const document = readMcpDocument(file)
+  const servers = { ...serversOf(document) }
+  if (!Object.hasOwn(servers, name)) throw new Error(`${name} is not configured.`)
+  if (Object.hasOwn(servers, trimmed)) throw new Error(`${trimmed} is already configured.`)
+  const entry = servers[name]
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error(`${name} is not configured.`)
+  }
+  const copy = { ...(entry as Record<string, unknown>), id: newId() }
+  writeMcpDocument({ ...document, mcpServers: { ...servers, [trimmed]: copy } }, file)
+  return trimmed
+}
+
+export function nextMcpName(name: string, taken: Iterable<string>): string {
+  const used = new Set(taken)
+  if (!used.has(name)) return name
+  for (let n = 2; n < 100; n += 1) {
+    const candidate = `${name}-${n}`
+    if (!used.has(candidate)) return candidate
+  }
+  throw new Error("Could not find a free name.")
+}

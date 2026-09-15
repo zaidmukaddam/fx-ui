@@ -20,9 +20,13 @@ export {
   MCP_CONFIG_FILE,
   addMcpServer,
   connectionsToLoad,
+  duplicateMcpServer,
+  formatMcpFields,
   isRemote,
   mcpGrantLabel,
   mcpGrantScope,
+  nextMcpName,
+  parseMcpFields,
   pruneMcpGrants,
   readConnections,
   readMcpConfig,
@@ -31,6 +35,7 @@ export {
   setConnectionUsed,
   setMcpDisabled,
   serverFrom,
+  updateMcpServer,
   type Connection,
   type LocalServer,
   type RemoteServer,
@@ -62,6 +67,8 @@ const EMPTY: LoadedMcp = {
   problems: [],
   close: async () => {},
 }
+
+const snapshots = new Map<string, Pick<LoadedMcp, "tools" | "problems">>()
 
 function clientFor(connection: Connection): McpSession {
   const resolved = connection.config
@@ -117,7 +124,7 @@ export async function loadMcp(file = MCP_CONFIG_FILE, workspacePath?: string): P
     }),
   )
 
-  return {
+  const loaded: LoadedMcp = {
     tools,
     instructions: [
       connected.length ? `Connected MCP servers: ${connected.join(", ")}. Find their tools with capability_search, inspect inputs with mcp_select_tool, and run them with mcp_call_tool.` : "",
@@ -129,6 +136,8 @@ export async function loadMcp(file = MCP_CONFIG_FILE, workspacePath?: string): P
       await Promise.all(closers.map((close) => close().catch(() => {})))
     },
   }
+  snapshots.set(poolKey(file, workspacePath), { tools, problems })
+  return loaded
 }
 
 export type McpLease = Omit<LoadedMcp, "close"> & {
@@ -204,30 +213,48 @@ export function listMcpServers(file = MCP_CONFIG_FILE, workspacePath?: string): 
   id: string
   name: string
   url: string | null
+  headers?: Record<string, string>
+  env?: Record<string, string>
+  envFile?: string
+  cwd?: string
   signedIn: boolean
   disabled: boolean
   used: boolean
   tools: number
   toolNames: string[]
+  problem: string | null
+  needsSignIn: boolean
 }[] {
   const connections = readConnections(file)
   const bound = workspacePath ? readWorkspaceBindings(file)[workspacePath] : undefined
   const authorised = new Set(authorisedServers())
-  const live = pools.get(poolKey(file, workspacePath))?.live
-    ?? (workspacePath ? undefined : liveSets()[0])
+  const key = poolKey(file, workspacePath)
+  const live = pools.get(key)?.live ?? snapshots.get(key)
   return connections.map((connection) => {
     const toolNames = (live?.tools ?? [])
       .filter((tool) => tool.server === connection.name)
       .map((tool) => tool.tool.name)
+    const issue = live?.problems.find((entry) => entry.server === connection.name)
+    const config = connection.config
+    const remote = isRemote(config)
     return {
       id: connection.id,
       name: connection.name,
-      url: isRemote(connection.config) ? connection.config.url : null,
+      url: remote ? config.url : null,
+      ...(remote
+        ? { headers: config.headers }
+        : {
+            env: config.env,
+            envFile: config.envFile,
+            cwd: config.cwd,
+          }),
       signedIn: authorised.has(connection.id) || authorised.has(connection.name),
       disabled: !!connection.config.disabled,
       used: !bound || bound.includes(connection.id),
       tools: toolNames.length,
       toolNames,
+      problem: issue?.reason ?? null,
+      needsSignIn: !!issue?.needsSignIn,
     }
   })
 }
@@ -235,6 +262,7 @@ export function listMcpServers(file = MCP_CONFIG_FILE, workspacePath?: string): 
 export async function resetMcp(): Promise<void> {
   const closing = [...pools.values()]
   pools.clear()
+  snapshots.clear()
   await Promise.all(closing.map(async (current) => {
     try {
       await (await current.loaded).close()

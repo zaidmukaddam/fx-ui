@@ -203,7 +203,10 @@ workspace beats the same name at home, and `.fx` beats both.
 ### MCP servers, local and remote
 
 Settings adds one from a single line: an `https://…` URL for a remote server,
-or the command line that starts a local one. Removing it there takes it out of
+or the command line that starts a local one. Edit on that row sets headers on a
+remote server, or `env`, `envFile` and `cwd` on a local one, as `NAME=value`
+lines. Duplicate copies the connection under a new name and id, so a second
+org can share the command and differ in env. Removing it there takes it out of
 the running sessions as well. Either way it lands in `~/.fx-ui/mcp.json`, which
 stays hand-editable and keeps whatever else you have in it. Each connection
 gets a stable `id` when you add or import it; older files without one keep
@@ -215,7 +218,8 @@ merged. Nothing is read from the repo.
 Ignore here in Settings writes that list for the open workspace. Disable still
 pauses a connection everywhere. Tokens and OAuth stay in `~/.fx-ui`; a
 workspace file that only names connection ids is a later step, and automatic
-`.mcp.json` discovery is not in this version.
+`.mcp.json` discovery is not in this version. The row shows whether a
+connection is connected, needs sign-in, or failed to start.
 
 A remote server's tools ask before they run. Approval scopes include the
 connection id and its resolved URL, or its resolved command, arguments and

@@ -55,11 +55,14 @@ import {
   authorisedServers,
   beginServerSignIn,
   connectionsToLoad,
+  duplicateMcpServer,
   findMcpTool,
+  listMcpServers,
   listMcpTools,
   loadMcp,
   mcpGrantLabel,
   mcpGrantScope,
+  parseMcpFields,
   pruneMcpGrants,
   readConnections,
   readMcpConfig,
@@ -69,6 +72,7 @@ import {
   setConnectionUsed,
   signOutOfServer,
   storedAuth,
+  updateMcpServer,
 } from "./src/workspace/mcp"
 import { discoverMcpImports, importMcpServers } from "./src/workspace/mcp/import"
 import { resolveMcpConfig } from "./src/workspace/mcp/variables"
@@ -2169,6 +2173,76 @@ function reply(id, result) {
     expect(Object.keys(readMcpConfig(file))).toEqual(["files"])
   })
 
+  it("parses NAME=value lines and updates env or headers without dropping the id", () => {
+    expect(parseMcpFields("A=one\nB=two=still")).toEqual({ A: "one", B: "two=still" })
+    expect(() => parseMcpFields("nope")).toThrow(/NAME=value/)
+
+    const file = path.join(tempDir(), "mcp.json")
+    writeFileSync(
+      file,
+      JSON.stringify({
+        note: "keep",
+        mcpServers: {
+          remote: { id: "id-remote", url: "https://example.invalid/mcp", extra: true },
+          local: { id: "id-local", command: "npx", args: ["-y", "demo"] },
+        },
+      }),
+    )
+    updateMcpServer("remote", { headers: { Authorization: "Bearer x" } }, file)
+    updateMcpServer("local", { env: { PROJECT_REF: "abc" }, cwd: "/tmp", envFile: "/tmp/.env" }, file)
+    const saved = JSON.parse(readFileSync(file, "utf8"))
+    expect(saved.note).toBe("keep")
+    expect(saved.mcpServers.remote).toMatchObject({
+      id: "id-remote",
+      extra: true,
+      headers: { Authorization: "Bearer x" },
+    })
+    expect(saved.mcpServers.local).toMatchObject({
+      id: "id-local",
+      env: { PROJECT_REF: "abc" },
+      cwd: "/tmp",
+      envFile: "/tmp/.env",
+    })
+    updateMcpServer("remote", { headers: {} }, file)
+    expect(JSON.parse(readFileSync(file, "utf8")).mcpServers.remote.headers).toBeUndefined()
+  })
+
+  it("duplicates a connection under a new name and id", () => {
+    const file = path.join(tempDir(), "mcp.json")
+    writeFileSync(
+      file,
+      JSON.stringify({
+        mcpServers: {
+          supabase: { id: "id-one", command: "npx", args: ["-y", "supabase"], env: { P: "1" } },
+        },
+      }),
+    )
+    duplicateMcpServer("supabase", "supabase-2", file)
+    const connections = readConnections(file)
+    expect(connections.map((entry) => entry.name).sort()).toEqual(["supabase", "supabase-2"])
+    const copy = connections.find((entry) => entry.name === "supabase-2")!
+    expect(copy.id).not.toBe("id-one")
+    expect(copy.config).toMatchObject({ command: "npx", env: { P: "1" } })
+    expect(() => duplicateMcpServer("supabase", "supabase-2", file)).toThrow(/already configured/)
+  })
+
+  it("keeps a failed MCP load on the settings list after the lease is released", async () => {
+    const file = path.join(tempDir(), "mcp.json")
+    writeFileSync(
+      file,
+      JSON.stringify({ mcpServers: { gone: { command: "definitely-not-a-real-binary" } } }),
+    )
+    const loaded = await loadMcp(file)
+    expect(loaded.problems[0]?.server).toBe("gone")
+    await loaded.close()
+    expect(listMcpServers(file)[0]).toMatchObject({
+      name: "gone",
+      problem: expect.stringMatching(/./),
+      needsSignIn: false,
+    })
+    await resetMcp()
+  })
+
   it("reads a url server and a command server, and rejects a bad url", () => {
     const file = path.join(tempDir(), "mcp.json")
     writeFileSync(
@@ -3251,6 +3325,53 @@ process.stdin.on("data", chunk => {
     } finally {
       writeFileSync(config, JSON.stringify({ mcpServers: {} }))
       await app.close()
+    }
+  }, 20_000)
+
+  it("edits headers from settings", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    openSession(createSession(workspace.id).id, 0)
+    mkdirSync(DIR, { recursive: true })
+    const config = path.join(DIR, "mcp.json")
+    writeFileSync(config, JSON.stringify({ mcpServers: {} }))
+
+    const { renderer, app } = await mount(1100, 900)
+    const scrollDown = () => app.getByTestId("settings-scroll").wheel(0, -4_000)
+    try {
+      await app.getByTestId("open-settings").click()
+      await settle()
+      renderer.flush()
+
+      await scrollDown()
+      await app.getByTestId("mcp-add").click()
+      await settle()
+      renderer.flush()
+      await scrollDown()
+      await app.getByTestId("mcp-name").fill("guarded")
+      await app.getByTestId("mcp-source").fill("http://127.0.0.1:1/mcp")
+      await app.getByTestId("mcp-save").click()
+      await app.getByTestId("mcp-edit-guarded").waitFor({ timeoutMs: 8_000 })
+
+      await scrollDown()
+      await app.getByTestId("mcp-edit-guarded").click()
+      await settle()
+      renderer.flush()
+      await app.getByTestId("mcp-headers-guarded").fill("Authorization=Bearer secret")
+      await app.getByTestId("mcp-save-guarded").click()
+      await vi.waitFor(() =>
+        expect(readMcpConfig(config).guarded).toMatchObject({
+          url: "http://127.0.0.1:1/mcp",
+          headers: { Authorization: "Bearer secret" },
+        }),
+      )
+      await vi.waitFor(() => {
+        const row = listMcpServers(config, workspace.path).find((entry) => entry.name === "guarded")
+        expect(row?.problem).toBeTruthy()
+      })
+    } finally {
+      writeFileSync(config, JSON.stringify({ mcpServers: {} }))
+      await app.close()
+      await resetMcp()
     }
   }, 20_000)
 
