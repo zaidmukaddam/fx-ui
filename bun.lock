@@ -7,7 +7,7 @@
       "dependencies": {
         "@gpuix/react": "^0.7.0",
         "jsonc-parser": "^3.3.1",
-        "libfx": "^0.0.10",
+        "libfx": "^0.0.11",
         "react": "^19.2.4",
       },
       "devDependencies": {
@@ -19,8 +19,8 @@
     },
   },
   "patchedDependencies": {
+    "libfx@0.0.11": "patches/libfx@0.0.11.patch",
     "@gpuix/react@0.7.0": "patches/@gpuix%2Freact@0.7.0.patch",
-    "libfx@0.0.10": "patches/libfx@0.0.10.patch",
   },
   "packages": {
     "@gpuix/native": ["@gpuix/native@0.7.0", "", { "optionalDependencies": { "@gpuix/native-darwin-arm64": "0.7.0", "@gpuix/native-linux-x64-gnu": "0.7.0", "@gpuix/native-win32-x64-msvc": "0.7.0" } }, "sha512-nyYTs+edJ4aztXltcwkRzbmFwVEHcP0r4OmnHfvufbM/m+vOISkAZOMGw7F8QmDd0x/PPHUTCTVi76U5VBal8Q=="],
@@ -163,7 +163,7 @@
 
     "jsonc-parser": ["jsonc-parser@3.3.1", "", {}, "sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ=="],
 
-    "libfx": ["libfx@0.0.10", "", {}, "sha512-rkslSgwmmeTghQkJYYeFBIn6VRnSMZsPC6eNB86PVtkzOLLjYAr9KY3xBAq8aUdr0YcD2SgLqOojpH3vLC4xtw=="],
+    "libfx": ["libfx@0.0.11", "", {}, "sha512-4mHqeiSliMKeV6wBlIEiMi1YZALI2CuoJi3q8f4AbBzLsK6GPbVtLOJuyESc3N0oeVnmjUcEKBlEbRH1zBv7kQ=="],
 
     "lightningcss": ["lightningcss@1.33.0", "", { "dependencies": { "detect-libc": "^2.0.3" }, "optionalDependencies": { "lightningcss-android-arm64": "1.33.0", "lightningcss-darwin-arm64": "1.33.0", "lightningcss-darwin-x64": "1.33.0", "lightningcss-freebsd-x64": "1.33.0", "lightningcss-linux-arm-gnueabihf": "1.33.0", "lightningcss-linux-arm64-gnu": "1.33.0", "lightningcss-linux-arm64-musl": "1.33.0", "lightningcss-linux-x64-gnu": "1.33.0", "lightningcss-linux-x64-musl": "1.33.0", "lightningcss-win32-arm64-msvc": "1.33.0", "lightningcss-win32-x64-msvc": "1.33.0" } }, "sha512-WkUDrojuJs0xkgGf2udWxa3yGBRxPtxUkB79i6aCZLRgc7PM8fZe9TosfPDcvEpQZbuFASnHYmRLBLUbmLOIIA=="],
 
