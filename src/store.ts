@@ -126,6 +126,8 @@ export type QueuedPrompt = {
   id: string
   text: string
   images: string[]
+  /** Handed to the running turn; stays queued until it enters, in case it never does. */
+  steered?: boolean
 }
 
 export type ChildNote = {
@@ -956,7 +958,11 @@ function omitQueue(
   return omitRecord(queue, sessionId)
 }
 
-export function enqueuePrompt(sessionId: string, text: string, images: string[] = []): void {
+export function enqueuePrompt(
+  sessionId: string,
+  text: string,
+  images: string[] = [],
+): QueuedPrompt {
   const item: QueuedPrompt = { id: newId(), text, images }
   setState((current) => ({
     ...current,
@@ -965,6 +971,27 @@ export function enqueuePrompt(sessionId: string, text: string, images: string[] 
       [sessionId]: [...(current.queue[sessionId] ?? []), item],
     },
   }))
+  return item
+}
+
+export function setSteered(sessionId: string, id: string, steered: boolean): void {
+  setState((current) => {
+    const list = current.queue[sessionId]
+    if (!list?.some((item) => item.id === id)) return current
+    return {
+      ...current,
+      queue: {
+        ...current.queue,
+        [sessionId]: list.map((item) => (item.id === id ? { ...item, steered } : item)),
+      },
+    }
+  })
+}
+
+/** Drops the first steered prompt with this text, now that it has entered the turn. */
+export function takeSteered(sessionId: string, text: string): void {
+  const item = getState().queue[sessionId]?.find((entry) => entry.steered && entry.text === text)
+  if (item) removeQueued(sessionId, item.id)
 }
 
 export function removeQueued(sessionId: string, id: string): void {

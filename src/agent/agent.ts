@@ -24,7 +24,9 @@ import {
   recordUsage,
   removeMessage,
   sessionModel,
+  setSteered,
   shiftQueue,
+  takeSteered,
   NO_CREDENTIAL,
   updateSession,
   type Session,
@@ -474,7 +476,17 @@ export async function send(
   if (current.status === "running") {
     if (!trimmed && images.length === 0) return
     if (trimmed && images.length === 0 && enqueueChildNote(sessionId, trimmed)) return
-    enqueuePrompt(sessionId, trimmed, images)
+    const item = enqueuePrompt(sessionId, trimmed, images)
+    const turn = runtimes.get(sessionId)?.turn
+    if (!turn?.steer || images.length > 0 || !steerable(sessionId, trimmed)) return
+    // Marked before the await: the turn can reach its next boundary and report
+    // the message entering before steer() resolves.
+    setSteered(sessionId, item.id, true)
+    try {
+      await turn.steer(trimmed)
+    } catch {
+      setSteered(sessionId, item.id, false)
+    }
     return
   }
 
@@ -568,6 +580,11 @@ export async function send(
     for await (const event of turn) {
       if (event.type === "text_delta") stream.push("text", event.delta)
       else if (event.type === "reasoning_delta") stream.push("reasoning", event.delta)
+      else if (event.type === "user_message") {
+        stream.flush()
+        takeSteered(sessionId, event.text)
+        appendMessage(sessionId, { id: newId(), kind: "user", at: Date.now(), text: event.text })
+      }
     }
     stream.flush()
 
@@ -608,6 +625,16 @@ export async function send(
   if (findSession(getState(), sessionId)?.status !== "idle") return
   const next = shiftQueue(sessionId)
   if (next) await send(sessionId, next.text, next.images)
+}
+
+/** Steering takes plain text only: a skill command or an @-mention needs the
+ *  expansion a fresh turn gives it, so those wait in the queue instead. */
+function steerable(sessionId: string, text: string): boolean {
+  const runtime = runtimes.get(sessionId)
+  if (!runtime || splitCommand(text, runtime.commands)) return false
+  const state = getState()
+  const workspace = findWorkspace(state, findSession(state, sessionId)?.workspaceId ?? null)
+  return !workspace || mentionBlocks(workspace.path, text).blocks.length === 0
 }
 
 export function cancel(sessionId: string): void {

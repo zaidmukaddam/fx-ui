@@ -83,16 +83,18 @@ function Queue({ sessionId, items }: { sessionId: string; items: QueuedPrompt[] 
           }}
         >
           <Label truncate size={text.small} color={color.faint} grow>
-            {queuedLabel(item)}
+            {item.steered ? `Steering: ${queuedLabel(item)}` : queuedLabel(item)}
           </Label>
-          <IconButton
-            icon="x"
-            size={18}
-            tooltip="Remove from queue"
-            testId={`queue-dismiss-${item.id}`}
-            tone={color.ghost}
-            onClick={() => removeQueued(sessionId, item.id)}
-          />
+          {item.steered ? null : (
+            <IconButton
+              icon="x"
+              size={18}
+              tooltip="Remove from queue"
+              testId={`queue-dismiss-${item.id}`}
+              tone={color.ghost}
+              onClick={() => removeQueued(sessionId, item.id)}
+            />
+          )}
         </div>
       ))}
     </div>
@@ -338,7 +340,7 @@ export function Composer({
               running
                 ? liveChild
                   ? `${liveChild} · ⏎ to note`
-                  : "Running · ⏎ to queue"
+                  : "Running · ⏎ to steer"
                 : !hasContent && queued.length > 0
                   ? "⏎ sends the next queued prompt"
                   : readyToAnswer

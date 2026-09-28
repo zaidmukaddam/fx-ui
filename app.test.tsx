@@ -1120,6 +1120,110 @@ describe("queued prompts", () => {
       messagesOf(session.id).some((message) => message.kind === "user" && message.text === "do this next"),
     ).toBe(false)
   })
+
+  it("steers a running turn with Return, and shows the message once libfx accepts it", async () => {
+    mkdirSync(DIR, { recursive: true })
+    writeFileSync(
+      path.join(DIR, "providers.json"),
+      JSON.stringify({
+        grok: {
+          accessToken: "tok",
+          refreshToken: "r",
+          expiresAt: Date.now() + 3_600_000,
+          accountId: null,
+          account: "someone@example.com",
+        },
+      }),
+    )
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    setState((current) => ({
+      ...current,
+      apiKey: null,
+      models: [{ id: "grok-4.6", name: "Grok 4.6", provider: "grok", efforts: [] }],
+    }))
+    updateSession(session.id, (current) => ({
+      ...current,
+      model: "grok-4.6",
+      modelName: "Grok 4.6",
+      provider: "grok",
+    }))
+
+    const frames = (text: string) =>
+      new Response(
+        [
+          { type: "response.output_text.delta", delta: text },
+          { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } },
+        ]
+          .map((line) => `data: ${JSON.stringify(line)}\n\n`)
+          .join("") + "data: [DONE]\n\n",
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      )
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let arrived!: () => void
+    const firstRequest = new Promise<void>((resolve) => {
+      arrived = resolve
+    })
+    const bodies: string[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String((input as Request)?.url ?? input)
+      if (url.includes("cli-chat-proxy.grok.com") && !url.includes("/responses")) {
+        return Response.json({
+          data: [
+            { model: "grok-4.6", name: "Grok 4.6", api_backend: "responses", context_window: 500_000 },
+          ],
+        })
+      }
+      if (!url.includes("/responses")) {
+        return Response.json({
+          object: "list",
+          data: [{ id: "xai/grok-4.6", type: "language", released: 1, tags: ["tool-use"] }],
+        })
+      }
+      const body = String(init?.body ?? "")
+      if (body.includes("<request>")) return frames("A title")
+      bodies.push(body)
+      if (bodies.length === 1) {
+        arrived()
+        await gate
+        return frames("first.")
+      }
+      return frames("second.")
+    }) as unknown as typeof fetch
+
+    try {
+      await refreshCredentials()
+      const turn = send(session.id, "go")
+      await firstRequest
+
+      await send(session.id, "also check tests")
+      const queued = getState().queue[session.id] ?? []
+      expect(queued.map((item) => [item.text, item.steered])).toEqual([["also check tests", true]])
+
+      release()
+      await turn
+    } finally {
+      globalThis.fetch = realFetch
+      await closeSession(session.id)
+    }
+
+    expect(bodies).toHaveLength(2)
+    expect(bodies[1]).toContain("also check tests")
+    expect(getState().queue[session.id]).toBeUndefined()
+    expect(
+      messagesOf(session.id)
+        .filter((message) => message.kind === "user" || message.kind === "assistant")
+        .map((message) => [message.kind, message.text]),
+    ).toEqual([
+      ["user", "go"],
+      ["user", "also check tests"],
+      ["assistant", "first.second."],
+    ])
+  })
 })
 
 describe("named subagents", () => {

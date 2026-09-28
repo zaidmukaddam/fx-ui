@@ -303,13 +303,21 @@ speech bubble in its place means it is waiting on you, for an approval or an
 answer. A turn does not survive quitting the app: the conversation picks up
 from the last finished turn.
 
-### Queued prompts
+### Steering and queued prompts
 
-While a turn is running, Enter puts what you typed (and any attached images)
-on a list above the composer instead of sending it. × takes one off. A turn
-that finishes successfully sends the next item; stopping the turn, a failed
-request, a refusal, or hitting the output or step limit leaves the list.
-Enter on an empty composer sends the next one once nothing is running.
+While a turn is running, Enter steers it: plain text goes into the running turn
+through libfx's `turn.steer()`, which the model reads at its next safe boundary
+without losing the response in flight or finished tool work. The message shows
+in the transcript as soon as libfx accepts it. Until then it waits above the
+composer marked *Steering*, and it cannot be taken back.
+
+Images, skill commands and `@` mentions cannot steer, since they need the
+expansion a fresh turn gives them, so they go on a list above the composer
+instead, and so does anything the turn refuses. × takes one off. A turn that
+finishes successfully sends the next item; stopping the turn, a failed request,
+a refusal, or hitting the output or step limit leaves the list. Enter on an
+empty composer sends the next one once nothing is running. A named subagent
+that is working takes a note instead, as below.
 
 ### Copying an answer
 

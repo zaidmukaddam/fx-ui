@@ -37,6 +37,7 @@ declare module "libfx" {
     | { type: "text_delta"; delta: string }
     | { type: "reasoning_delta"; delta: string }
     | { type: "tool_start"; id: string; name: string }
+    | { type: "user_message"; text: string }
     | {
         type: "tool_end"
         id: string
@@ -48,6 +49,8 @@ declare module "libfx" {
   export interface Turn extends AsyncIterable<TurnEvent> {
     result: Promise<TurnResult>
     cancel(): void
+    /** Adds text at the next safe model boundary; rejects once the turn settles. */
+    steer?(text: string): Promise<void>
   }
 
   export interface HostTool {
