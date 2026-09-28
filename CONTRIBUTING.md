@@ -11,10 +11,6 @@ bun install
 bun run dev
 ```
 
-`bun install` also installs the patched gpuix binary from `vendor/`.
-[docs/how-it-works.md](docs/how-it-works.md#the-patched-gpuix-binary) explains
-how to rebuild it.
-
 ## Before you open a pull request
 
 ```bash

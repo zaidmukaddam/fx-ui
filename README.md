@@ -44,5 +44,5 @@ The DMG uses LZMA compression and explicit volume headroom for reliable CI build
 
 ## License
 
-[Apache-2.0](LICENSE). The vendored gpuix binary's notices are in
+[Apache-2.0](LICENSE). The bundled gpuix binary's notices are in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -5,7 +5,8 @@
     "": {
       "name": "fx-ui",
       "dependencies": {
-        "@gpuix/react": "^0.7.0",
+        "@gpuix/native": "0.10.0",
+        "@gpuix/react": "0.10.0",
         "jsonc-parser": "^3.3.1",
         "libfx": "^0.0.11",
         "react": "^19.2.4",
@@ -20,18 +21,17 @@
   },
   "patchedDependencies": {
     "libfx@0.0.11": "patches/libfx@0.0.11.patch",
-    "@gpuix/react@0.7.0": "patches/@gpuix%2Freact@0.7.0.patch",
   },
   "packages": {
-    "@gpuix/native": ["@gpuix/native@0.7.0", "", { "optionalDependencies": { "@gpuix/native-darwin-arm64": "0.7.0", "@gpuix/native-linux-x64-gnu": "0.7.0", "@gpuix/native-win32-x64-msvc": "0.7.0" } }, "sha512-nyYTs+edJ4aztXltcwkRzbmFwVEHcP0r4OmnHfvufbM/m+vOISkAZOMGw7F8QmDd0x/PPHUTCTVi76U5VBal8Q=="],
+    "@gpuix/native": ["@gpuix/native@0.10.0", "", { "dependencies": { "eventsource-parser": "^4.1.0", "zod": "^4.4.3" }, "optionalDependencies": { "@gpuix/native-darwin-arm64": "0.10.0", "@gpuix/native-linux-x64-gnu": "0.10.0", "@gpuix/native-win32-x64-msvc": "0.10.0" } }, "sha512-hBvQ0vT1ybOoRDQu6JASgRfdcWFbHTRQ0Fr3oiTxdclvzdR8v9fBUQVYfVtgZnnL4pl1LS02eNrQx8//E6/Xjw=="],
 
-    "@gpuix/native-darwin-arm64": ["@gpuix/native-darwin-arm64@0.7.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-ZnAdAqoL60tZH+u4sJKWSY4Cx9cfsFxtqkgMoD39FdMSAgtXhg5b6qHaSltBrc7VMs5z8cVxxI9fK9KR+LjTNg=="],
+    "@gpuix/native-darwin-arm64": ["@gpuix/native-darwin-arm64@0.10.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-Uu1aiZsKBPuk9llFkoaFU95k1t+drG3txv97SgZZZ2x4LKqvy5c0bmklhCG1r7Ypm62qY/NKY0Sl553r/G34Tg=="],
 
-    "@gpuix/native-linux-x64-gnu": ["@gpuix/native-linux-x64-gnu@0.7.0", "", { "os": "linux", "cpu": "x64" }, "sha512-jch73oOMDX5kr+Qe6SjFQ7jroCnjgo42cYEVQ8UonWLOVxRIhXo0InJEgLk70HJ9bgNkKXwBSoqBTXBpG/Xgng=="],
+    "@gpuix/native-linux-x64-gnu": ["@gpuix/native-linux-x64-gnu@0.10.0", "", { "os": "linux", "cpu": "x64" }, "sha512-HNLL+jp+FA5qvdHq52MDGnj6LmsbkVXojwalGgNYA+iJlffFGfzHkCRmoM21Z+TNKa5cvuRTPgnfP6FGr8KxIw=="],
 
-    "@gpuix/native-win32-x64-msvc": ["@gpuix/native-win32-x64-msvc@0.7.0", "", { "os": "win32", "cpu": "x64" }, "sha512-NTJPEmyU2Cxn+nejY7H8f7htZS3WVz79ek+R7gnAlFtASKvPaUtUYCKHrhAb1HToxqVm7cvaKf3ZxjY3ej4BCw=="],
+    "@gpuix/native-win32-x64-msvc": ["@gpuix/native-win32-x64-msvc@0.10.0", "", { "os": "win32", "cpu": "x64" }, "sha512-4NQ81KBzcItiSJGupmvvSpuELCF139fqjQSSscHKbYCD+mcAyhOxADr3I2BNHXWhQr42jUgXhV2n/n0udN1KMQ=="],
 
-    "@gpuix/react": ["@gpuix/react@0.7.0", "", { "dependencies": { "@gpuix/native": "^0.7.0", "eventsource-parser": "^4.1.0", "react-reconciler": "^0.31.0", "zod": "^4.4.3" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-L8lL/OmFkL0DI9Cip13kbdnOo2tNTvboHu01O4Qyph/LAb8og0BSs3QAzeG1vUBddZNFysAQlbhjWPBNCOke+g=="],
+    "@gpuix/react": ["@gpuix/react@0.10.0", "", { "dependencies": { "@gpuix/native": "^0.10.0", "react-reconciler": "^0.31.0" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-RB//IrYBghiso0K0h8V+K9huwzONtEhwdpXoCs/rZjqN1F4RGxjhaeChtAwTt/JnjTSM1rcLi5cicM1xy8kr+g=="],
 
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.6.0", "", {}, "sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw=="],
 

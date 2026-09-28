@@ -1,16 +1,13 @@
 # Third-party notices
 
 fx-ui is licensed under the Apache License 2.0, in [LICENSE](LICENSE). The
-repository also carries one binary built from other people's code, and one
-patch to a dependency.
+macOS app also bundles one binary built from other people's code.
 
-## vendor/gpuix-native.darwin-arm64.node
+## @gpuix/native
 
-A build of [`@gpuix/native`](https://github.com/remorses/gpuix) 0.7.0, licensed
-under the Apache License 2.0, modified by
-[`patches/gpuix-native.diff`](patches/gpuix-native.diff). The patch changes the
-text field's caret height and its handling of ⌘V, and adds `promptForPaths` to
-the renderer.
+The published build of [`@gpuix/native`](https://github.com/remorses/gpuix)
+0.10.0, licensed under the Apache License 2.0, unmodified. The app bundles it as
+its renderer.
 
 The binary contains:
 
@@ -30,12 +27,6 @@ carry their own licenses, listed in its
 [acknowledgements](https://codeberg.org/CosmicHarper/two-face/src/branch/main/generated/acknowledgements_full.md).
 The binary also links other Rust crates from crates.io, each under its own
 license; `cargo license` in gpuix's `packages/native` lists them.
-
-## patches/@gpuix%2Freact@0.7.0.patch
-
-A change to [`@gpuix/react`](https://github.com/remorses/gpuix) 0.7.0, licensed
-under the Apache License 2.0. Bun applies it when the dependencies are
-installed.
 
 ## License texts
 

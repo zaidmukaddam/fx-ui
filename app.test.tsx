@@ -2862,8 +2862,8 @@ describeNative("fx app", () => {
 
     const bounds = renderer.getElementBounds(strip!.id)!
     renderer.nativeSimulateScrollWheel(
-      bounds[0] + bounds[2] / 2,
-      bounds[1] + bounds[3] / 2,
+      bounds.x + bounds.width / 2,
+      bounds.y + bounds.height / 2,
       400,
       0,
     )
@@ -5616,6 +5616,31 @@ process.stdin.on("data", chunk => {
 
     await app.getByTestId("mention-notes.md").waitFor()
     expect(renderer.getPaintedText().join("\n")).toContain("@")
+
+    await app.close()
+  })
+
+  it.skipIf(!CAN_PICK_IMAGES)("attaches the images chosen in the file panel", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    const session = createSession(workspace.id)
+    openSession(session.id, 0)
+    const picked = path.join(tempDir(), "shot.png")
+    writeFileSync(picked, Buffer.from("89504e470d0a1a0a", "hex"))
+
+    const { app, renderer } = await mount()
+    const asked: unknown[] = []
+    ;(renderer as unknown as { promptForPaths: (options: unknown) => Promise<string[]> }).promptForPaths =
+      async (options) => {
+        asked.push(options)
+        return [picked]
+      }
+
+    await app.getByTestId("attach-file").click()
+    await app.getByTestId("attach-choose").click()
+
+    await vi.waitFor(() => expect(getState().attachments[session.id]).toHaveLength(1))
+    expect(getState().attachments[session.id]![0]).toMatch(/\.png$/)
+    expect(asked).toEqual([{ files: true, multiple: true, prompt: "Attach" }])
 
     await app.close()
   })

@@ -1,4 +1,4 @@
-import { forwardRef, useRef, useState } from "react"
+import { forwardRef, useState } from "react"
 import { motion, useGpuix, type MotionTransition, type PublicInstance } from "@gpuix/react"
 import type { EventPayload } from "@gpuix/native"
 import {
@@ -653,33 +653,31 @@ const ATTACH_ACTIONS = [
   { value: "mention", label: "Mention a file", hint: "@" },
 ]
 
-type FilePanel = { promptForPaths?: (elementId: number, multiple: boolean) => void }
+type FilePanel = {
+  promptForPaths?: (options?: { files?: boolean; multiple?: boolean; prompt?: string }) => Promise<string[] | null>
+}
 
 export function AttachMenu({ session, onMention }: { session: Session; onMention: () => void }) {
   const panel = useGpuix().renderer as unknown as FilePanel | null
-  const trigger = useRef<PublicInstance>(null)
 
-  const choose = () => {
-    if (panel?.promptForPaths && trigger.current) panel.promptForPaths(trigger.current.id, true)
-    else void chooseImages(session.id)
+  const choose = async () => {
+    if (!panel?.promptForPaths) return void chooseImages(session.id)
+    const paths = await panel.promptForPaths({ files: true, multiple: true, prompt: "Attach" })
+    if (paths?.length) attachImages(session.id, paths)
   }
 
   return (
     <Select
       value=""
       onValueChange={(action) => {
-        if (action === "choose") choose()
+        if (action === "choose") void choose()
         else if (action === "paste") void pasteImage(session.id)
         else onMention()
       }}
     >
       <SelectTrigger asChild>
         <div
-          ref={trigger}
           testId="attach-file"
-          onChange={(event: { value?: string }) =>
-            attachImages(session.id, (event.value ?? "").split("\n").filter(Boolean))
-          }
           style={{
             display: "flex",
             alignItems: "center",

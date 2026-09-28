@@ -86,10 +86,10 @@ An `<input>` at `fontSize: 12` and one at `fontSize: 13` both measure 26,
 because the row height is `window.line_height()`, the window's text style and
 not the field's. `lineHeight` does not touch it: measured, the box stays 26 with
 or without one. The ink sits at a fixed offset inside that box, roughly `y` 6 to
-19. Stock gpuix paints the caret the full 26, more than twice the height of its
-own text. The patched build paints it at 1.2× the field's own font size,
-centred on the row, so a wrapped draft gets the same small caret a one-line
-field does.
+19. gpuix 0.7 painted the caret the full 26, more than twice the height of its
+own text, and fx-ui patched it. gpuix 0.10 sizes the caret from the field's own
+line height, so a wrapped draft gets the same small caret a one-line field
+does.
 
 ### `overflow: hidden` always keeps the top of a box, never the middle
 
@@ -117,17 +117,16 @@ pane a long model name pushed the composer footer 123px past its edge. The root
 takes a `style`, and `minWidth: 0` there is what lets the trigger shrink and
 truncate.
 
-### The stock text field swallows ⌘V even when there is nothing to paste
+### gpuix's text field used to swallow ⌘V even with nothing to paste
 
 gpuix binds `cmd-v` and `ctrl-v` to its `Paste` action, which inserts clipboard
 text and otherwise does nothing, and an action that does not propagate ends the
 key's dispatch. So neither the element's `onKeyDown` nor the window's ever sees
 ⌘V, while ⌘K, ⌘⇧V and plain keys reach both, and an image on the clipboard had
-no way in. gpuix has no clipboard, file-drop or file-dialog API either.
+no way in. gpuix 0.7 had no clipboard, file-drop or file-dialog API either.
 
-fx-ui runs a patched native build (`patches/gpuix-native.diff`, built into
-`vendor/`) whose `Paste` calls `cx.propagate()` when the clipboard holds no
-text. ⌘V then arrives as an ordinary key event and the app reads the pasteboard
+gpuix 0.10's `Paste` calls `cx.propagate()` when the clipboard holds no text,
+which fx-ui used to patch in. ⌘V then arrives as an ordinary key event and the app reads the pasteboard
 itself: `osascript -l JavaScript` with `NSPasteboard` takes a Finder copy's file
 URLs first, then PNG data, then TIFF converted to PNG. Clipboard text still wins
 and pastes as text.
@@ -136,10 +135,10 @@ and pastes as text.
 
 AppleScript's `choose file` works but is slow to appear: every call starts a
 fresh `osascript`, which has to become a foreground app and build its own panel.
-The patched build adds `promptForPaths(elementId, multiple)`, which opens GPUI's
-`prompt_for_paths`, an NSOpenPanel inside the app's own process, and reports the
-chosen paths as a `change` event on the element that asked. `choose file`
-remains the fallback for the stock binary. A script that names a variable
+The renderer's `promptForPaths({ files, multiple })` opens GPUI's
+`prompt_for_paths`, an NSOpenPanel inside the app's own process, and resolves
+with the chosen paths, or null on cancel. `choose file` remains the fallback
+when the renderer has none. A script that names a variable
 `picture` does not compile, since that is an AppleScript class, and `osascript`
 then exits before any dialog opens, so the tests compile both scripts with
 `osacompile`.
@@ -148,10 +147,10 @@ then exits before any dialog opens, so the tests compile both scripts with
 
 dyld rejects it with `mis-aligned LINKEDIT string pool`, while the same crate
 linked against the 26.5 SDK loads, and the published binary's string pool sits
-at an offset just as unaligned. The napi loader swallows the failure: it tries
-the patched file first, catches the error, and loads the published binary
-instead, so the app runs and only ⌘V is wrong. The test that presses ⌘V in an
-empty field is what notices.
+at an offset just as unaligned. This bit while fx-ui shipped its own gpuix
+build: the napi loader tried that file first, swallowed the error and loaded the
+published binary instead, so the app ran and only ⌘V was wrong. Keep it in mind
+if a local build comes back.
 
 ### `<img src>` takes an absolute path, and `borderRadius` rounds the picture
 

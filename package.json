@@ -6,15 +6,15 @@
   "type": "module",
   "scripts": {
     "dev": "bun --hot app.tsx",
-    "build": "bun build --compile --asset-naming=\"[name].[ext]\" app.tsx node_modules/libfx/libfx.darwin-arm64.node node_modules/libfx/fx-core.wasm node_modules/libfx/fx-term.wasm --outfile dist/fx",
+    "build": "bun build --compile --asset-naming=\"[name].[ext]\" app.tsx node_modules/libfx/libfx.darwin-arm64.node node_modules/libfx/fx-core.wasm node_modules/libfx/fx-term.wasm node_modules/@gpuix/native-darwin-arm64/gpuix-native.darwin-arm64.node --outfile dist/fx",
     "package": "bun scripts/package.ts",
     "screenshot": "bun screenshot.ts",
     "test": "rm -rf .tmp-test-home && FX_UI_HOME=.tmp-test-home vitest run",
-    "typecheck": "tsc --noEmit",
-    "postinstall": "rm -f node_modules/@gpuix/native/gpuix-native.darwin-arm64.node && cp vendor/gpuix-native.darwin-arm64.node node_modules/@gpuix/native/"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@gpuix/react": "^0.7.0",
+    "@gpuix/native": "0.10.0",
+    "@gpuix/react": "0.10.0",
     "jsonc-parser": "^3.3.1",
     "libfx": "^0.0.11",
     "react": "^19.2.4"
@@ -26,7 +26,6 @@
     "vitest": "^4.0.18"
   },
   "patchedDependencies": {
-    "@gpuix/react@0.7.0": "patches/@gpuix%2Freact@0.7.0.patch",
     "libfx@0.0.11": "patches/libfx@0.0.11.patch"
   }
 }

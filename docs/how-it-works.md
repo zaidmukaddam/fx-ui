@@ -272,7 +272,7 @@ that id and endpoint.
 ### Images
 
 ⌘V pastes an image from the clipboard, such as a screenshot or a copied image,
-through the [patched gpuix build](#the-patched-gpuix-binary). In the
+which gpuix hands on when the clipboard holds no text. In the
 + menu, *Paste image* reads the clipboard directly, which also takes an
 image file copied in Finder whatever text that copy carries. *Choose images…*
 picks them from disk, and `@screenshot.png` mentions one in the workspace.
@@ -423,46 +423,6 @@ servers themselves, and one checkpoint per session. `FX_UI_HOME` moves that
 directory, which is what the tests and the screenshot script use so they never
 touch your real workspaces. While it is set, the `.claude` and `.agents` skill
 folders are looked for inside it instead of in your home folder.
-
-## The patched gpuix binary
-
-The app runs its own build of `@gpuix/native` 0.7.0 with three changes, from
-`patches/gpuix-native.diff`:
-
-- The text field draws the caret at the height of its own font instead of the
-  full 26px row, so a wrapped draft does not get a caret twice the size of its
-  text.
-- The text field binds ⌘V to its own paste and used to swallow the key even
-  when the clipboard held only an image. When there is no text to paste, the
-  key now carries on to `onKeyDown`.
-- The renderer gains `promptForPaths(elementId, multiple)`, which opens GPUI's
-  own macOS file panel and reports the chosen paths as a `change` event on that
-  element, so choosing images does not wait for `osascript` to build a panel.
-
-`vendor/gpuix-native.darwin-arm64.node` is that build, and `postinstall` copies
-it next to the package's loader, which tries that path before the published
-binary. It is built with GPUI's `runtime_shaders` because this machine's Xcode
-has no Metal toolchain, so its shaders compile when the window opens instead of
-at build time. It is linked against the macOS 26.5 SDK, like the published
-binary. macOS 27 refuses an addon linked against its own beta SDK, and the
-loader then falls back to the published binary without a word, which the ⌘V
-test is there to catch. To rebuild it:
-
-```sh
-git clone https://github.com/remorses/gpuix && cd gpuix
-git checkout @gpuix/native@0.7.0
-git submodule update --init --depth 1 zed
-git apply ../fx-ui/patches/gpuix-native.diff
-cd packages/native
-export DEVELOPER_DIR=/Library/Developer/CommandLineTools
-export SDKROOT=$DEVELOPER_DIR/SDKs/MacOSX26.5.sdk
-rustup run 1.97.1 cargo build --release --features gpui_platform/runtime_shaders
-cp target/release/libgpuix_native.dylib ../../../fx-ui/vendor/gpuix-native.darwin-arm64.node
-```
-
-Drop the feature once `xcodebuild -downloadComponent MetalToolchain` has run,
-to match the published build exactly. Upgrading gpuix means redoing this, or
-deleting all of it if upstream takes the change.
 
 ## Where the code lives
 
