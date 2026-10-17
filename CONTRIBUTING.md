@@ -4,7 +4,9 @@ fx-ui is small, so there are only a few rules.
 
 ## Setup
 
-You need macOS on Apple silicon and [Bun](https://bun.sh).
+You need macOS on Apple silicon and [Bun](https://bun.sh) 1.4.2, the version CI
+uses. Bun 1.3 cannot read this lockfile and rewrites it along with unrelated
+packages, so don't commit a lockfile written by an older Bun.
 
 ```bash
 bun install

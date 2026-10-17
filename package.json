@@ -4,6 +4,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.4.2",
   "scripts": {
     "dev": "bun --hot app.tsx",
     "build": "bun build --compile --asset-naming=\"[name].[ext]\" app.tsx node_modules/libfx/libfx.darwin-arm64.node node_modules/libfx/fx-core.wasm node_modules/libfx/fx-term.wasm node_modules/@gpuix/native-darwin-arm64/gpuix-native.darwin-arm64.node --outfile dist/fx",
