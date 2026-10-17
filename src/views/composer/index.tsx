@@ -258,7 +258,7 @@ export function Composer({
           minWidth: 0,
           paddingLeft: CARD_PADDING,
           paddingRight: CARD_PADDING,
-          paddingTop: space.md,
+          paddingTop: CARD_PADDING_Y,
           paddingBottom: CARD_PADDING_Y,
           borderRadius: radius.lg,
           borderWidth: 1,
@@ -295,7 +295,7 @@ export function Composer({
           </div>
         ) : null}
 
-        <div style={{ display: "flex", flexDirection: "row", minWidth: 0 }}>
+        <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: space.md, minWidth: 0 }}>
           <textarea
             testId="composer"
             value={draft}
@@ -325,20 +325,24 @@ export function Composer({
               color: color.text,
             }}
           />
+          <div style={{ marginRight: -space.sm, flexShrink: 0 }}>{sendAffordance}</div>
         </div>
+      </div>
 
-        {/* Pulled out by the chips' own padding, so their text lines up with the draft. */}
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "row",
-            alignItems: "center",
-            gap: space.xs,
-            minWidth: 0,
-            marginLeft: -space.sm,
-            marginRight: -space.sm,
-          }}
-        >
+      {/* Inset by the card's border and padding less the chips' own, so the
+          first chip's text lines up with the draft above it. */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          gap: space.xs,
+          minWidth: 0,
+          paddingTop: space.md,
+          paddingLeft: COMPOSER_CARD_INSET - space.sm,
+          paddingRight: COMPOSER_CARD_INSET - space.sm,
+        }}
+      >
         <ModePicker session={session} />
         <div style={{ marginLeft: -2, flexShrink: 0 }}>
           {CAN_PICK_IMAGES ? (
@@ -364,8 +368,6 @@ export function Composer({
         {tight ? null : <FastToggle session={session} />}
         {tight ? null : <EffortPicker session={session} />}
         <ContextMeter session={session} />
-        {sendAffordance}
-        </div>
       </div>
     </div>
   )
