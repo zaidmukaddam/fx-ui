@@ -27,9 +27,6 @@ import {
 import { useTokenPicker } from "./picker"
 import { TokenPicker } from "./tokens"
 
-const PROMPT_ROW_HEIGHT = 15
-const PROMPT_LIFT = -6
-
 const CARD_PADDING = space.lg
 const CARD_PADDING_Y = space.sm
 
@@ -37,17 +34,7 @@ const THUMBNAIL_SIZE = 56
 
 export const COMPOSER_CARD_INSET = CARD_PADDING + 1
 
-const ADVANCE_RATIO = 0.619
-
 const SEND_SIZE = 24
-
-const PROMPT_CHROME = (CARD_PADDING + 1) * 2 + SEND_SIZE + space.md
-
-function fitsOneRow(draft: string, column: number): boolean {
-  if (draft.includes("\n")) return false
-  const perRow = Math.floor((column - PROMPT_CHROME) / (text.body * ADVANCE_RATIO)) - 2
-  return draft.length <= Math.max(8, perRow)
-}
 
 function queuedLabel(item: QueuedPrompt): string {
   const line = item.text.trim().split("\n")[0] ?? ""
@@ -184,7 +171,6 @@ export function Composer({
   const readyToAnswer = canAnswer(state, session)
 
   const tight = column < 340
-  const oneRow = fitsOneRow(draft, column)
 
   const submit = () => {
     if (picker.open && picker.suggestions.length > 0) {
@@ -272,19 +258,12 @@ export function Composer({
           minWidth: 0,
           paddingLeft: CARD_PADDING,
           paddingRight: CARD_PADDING,
-          paddingTop: CARD_PADDING_Y,
+          paddingTop: space.md,
           paddingBottom: CARD_PADDING_Y,
           borderRadius: radius.lg,
           borderWidth: 1,
           borderColor: color.border,
           backgroundColor: color.raised,
-          boxShadow: {
-            offsetX: 0,
-            offsetY: 4,
-            blurRadius: 16,
-            spreadRadius: -4,
-            color: "#000000cc",
-          },
         }}
       >
         <Queue sessionId={session.id} items={queued} />
@@ -316,23 +295,7 @@ export function Composer({
           </div>
         ) : null}
 
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "row",
-            alignItems: oneRow ? "center" : "flex-end",
-            gap: space.md,
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              flexGrow: 1,
-              minWidth: 0,
-              height: oneRow ? PROMPT_ROW_HEIGHT : undefined,
-              overflow: "hidden",
-            }}
-          >
+        <div style={{ display: "flex", flexDirection: "row", minWidth: 0 }}>
           <textarea
             testId="composer"
             value={draft}
@@ -359,27 +322,23 @@ export function Composer({
               minWidth: 0,
               fontSize: text.body,
               fontFamily: FONT,
-              marginTop: oneRow ? PROMPT_LIFT : 0,
               color: color.text,
             }}
           />
-          </div>
-          <div style={{ marginRight: -space.sm, flexShrink: 0 }}>{sendAffordance}</div>
         </div>
-      </div>
 
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "center",
-          flexWrap: "wrap",
-          rowGap: space.xs,
-          gap: space.md,
-          minWidth: 0,
-          paddingTop: space.md,
-        }}
-      >
+        {/* Pulled out by the chips' own padding, so their text lines up with the draft. */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: space.xs,
+            minWidth: 0,
+            marginLeft: -space.sm,
+            marginRight: -space.sm,
+          }}
+        >
         <ModePicker session={session} />
         <div style={{ marginLeft: -2, flexShrink: 0 }}>
           {CAN_PICK_IMAGES ? (
@@ -405,6 +364,8 @@ export function Composer({
         {tight ? null : <FastToggle session={session} />}
         {tight ? null : <EffortPicker session={session} />}
         <ContextMeter session={session} />
+        {sendAffordance}
+        </div>
       </div>
     </div>
   )

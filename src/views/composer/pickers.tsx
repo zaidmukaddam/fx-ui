@@ -27,8 +27,6 @@ import {
 } from "../../store"
 import { ModelChoice, keyOf } from "../models"
 
-/** A generous average advance for short lowercase labels in the UI face. */
-const LABEL_ADVANCE = 0.65
 
 export const MODES: { value: PermissionMode; label: string; hint: string }[] = [
   { value: "ask", label: "Ask", hint: "Every edit and command asks" },
@@ -111,11 +109,6 @@ export function ModelPicker({ session, maxWidth }: { session: Session; maxWidth:
       }}
     />
   )
-}
-
-function effortTriggerWidth(options: string[]): number {
-  const widest = options.reduce((longest, option) => Math.max(longest, option.length), 0)
-  return Math.ceil(widest * LABEL_ADVANCE * text.micro) + space.sm * 3 + 11
 }
 
 export function FastToggle({ session }: { session: Session }) {
@@ -326,7 +319,7 @@ export function EffortPicker({ session }: { session: Session }) {
   return (
     <Select value="effort" onValueChange={() => {}}>
       <SelectTrigger asChild>
-        <Chip testId="effort-trigger" width={effortTriggerWidth(options)} justify="center">
+        <Chip testId="effort-trigger">
           <Label size={text.micro} color={color.tertiary}>
             {value}
           </Label>

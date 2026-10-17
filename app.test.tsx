@@ -4956,7 +4956,8 @@ process.stdin.on("data", chunk => {
     await settle()
     renderer.flush()
     const atXhigh = await app.getByTestId("effort-trigger").bounds()
-    expect(atXhigh.width).toBe(atLow.width)
+    // The chip fits its label; its right edge, which the dial hangs from, stays put.
+    expect(atXhigh.x + atXhigh.width).toBe(atLow.x + atLow.width)
 
     await app.close()
   })

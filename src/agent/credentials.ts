@@ -40,9 +40,13 @@ export async function withProviderModels(catalogue: Model[]): Promise<Model[]> {
     signedIn().map(async (provider) => {
       try {
         const models = await listProviderModels(provider)
+        const label = PROVIDERS[provider].label
         return models.map((model) => ({
           id: model.id,
-          name: `${model.name} · ${PROVIDERS[provider].label}`,
+          // "Grok 4.7 Fast · Grok" says the plan twice; only add it when the name doesn't.
+          name: model.name.toLowerCase().includes(label.toLowerCase())
+            ? model.name
+            : `${model.name} · ${label}`,
           provider,
           efforts: model.efforts,
           defaultEffort: model.defaultEffort,
