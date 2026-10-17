@@ -304,7 +304,7 @@ export function Sidebar({ state }: { state: AppState }) {
         flexShrink: 0,
         display: "flex",
         flexDirection: "column",
-        backgroundColor: color.raised,
+        backgroundColor: color.sidebar,
         borderRightWidth: 1,
         borderColor: color.border,
       }}

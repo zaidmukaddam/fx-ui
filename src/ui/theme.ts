@@ -7,6 +7,7 @@ export const MONO = "SF Mono"
 
 export const color = {
   background: "#0f0f10",
+  sidebar: "#0a0a0b",
   raised: "#161618",
   muted: "#1c1c1f",
   selected: "#232326",
