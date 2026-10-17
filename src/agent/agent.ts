@@ -50,6 +50,7 @@ import { type ProviderId } from "./oauth"
 import { refreshGitStatus } from "../workspace/git"
 import { loadSkills, splitCommand, type SkillCommand } from "../workspace/skills"
 import { acquireMcp, MCP_CONFIG_FILE, pruneMcpGrants, resetMcp, type McpLease } from "../workspace/mcp"
+import { notifyInBackground } from "../workspace/notify"
 import { beginTurn, endTurn, forgetTurn } from "../workspace/turns"
 
 type Runtime = {
@@ -621,6 +622,12 @@ export async function send(
   }
 
   const stopped = cancelled.delete(sessionId)
+  if (!stopped) {
+    void notifyInBackground(
+      findSession(getState(), sessionId)?.title || "fx",
+      completed ? "Finished its turn." : "Stopped before finishing its turn.",
+    )
+  }
   if (stopped || !completed) return
   if (findSession(getState(), sessionId)?.status !== "idle") return
   const next = shiftQueue(sessionId)

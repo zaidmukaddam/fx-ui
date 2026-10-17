@@ -203,6 +203,8 @@ export type AppState = {
   sidebarCollapsed: boolean
   apiKey: string | null
   useCli: boolean
+  /** Notify when a turn finishes or an approval waits while fx is in the background. */
+  notify: boolean
   accounts: Account[]
   models: Model[]
   defaultModel: Chosen | null
@@ -276,6 +278,7 @@ function emptyState(): AppState {
     sidebarCollapsed: false,
     apiKey: process.env.AI_GATEWAY_API_KEY ?? null,
     useCli: false,
+    notify: false,
     accounts: [],
     models: [],
     defaultModel: null,
@@ -305,6 +308,7 @@ const PERSISTED = [
   "sidebarCollapsed",
   "apiKey",
   "useCli",
+  "notify",
   "models",
   "defaultModel",
   "usage",
@@ -956,6 +960,10 @@ function omitQueue(
   sessionId: string,
 ): Record<string, QueuedPrompt[]> {
   return omitRecord(queue, sessionId)
+}
+
+export function setNotify(notify: boolean): void {
+  setState((current) => ({ ...current, notify }))
 }
 
 export function enqueuePrompt(

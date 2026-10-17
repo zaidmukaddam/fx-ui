@@ -4135,6 +4135,22 @@ process.stdin.on("data", chunk => {
     expect(sawGateway).toBe(true)
   })
 
+  it("turns background notifications on from settings, and keeps the choice", async () => {
+    const workspace = createWorkspace(tempDir(), "demo")
+    openSession(createSession(workspace.id).id, 0)
+    expect(getState().notify).toBe(false)
+
+    const { app } = await mount()
+    await app.getByTestId("open-settings").click()
+    await app.getByTestId("settings-notify").click()
+    expect(getState().notify).toBe(true)
+
+    flushState()
+    const saved = JSON.parse(readFileSync(path.join(DIR, "state.json"), "utf8")) as { notify?: boolean }
+    expect(saved.notify).toBe(true)
+    await app.close()
+  })
+
   it("shows every section of settings, and what is signed in", async () => {
     mkdirSync(DIR, { recursive: true })
     writeFileSync(

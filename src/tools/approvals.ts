@@ -5,6 +5,7 @@ import {
   newId,
   updateSession,
 } from "../store"
+import { notifyInBackground } from "../workspace/notify"
 
 type Decision = "allowed" | "granted" | "denied"
 
@@ -91,6 +92,7 @@ export async function requestApproval(request: ApprovalRequest): Promise<boolean
     scope: request.scope,
     decision: "pending",
   })
+  void notifyInBackground(session.title || "fx", `Waiting for your approval: ${request.title}`, true)
 
   const decision = await new Promise<Decision>((resolve) => {
     pendingApprovals.set(approvalId, resolve)

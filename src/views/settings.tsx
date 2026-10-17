@@ -37,6 +37,7 @@ import {
   findSession,
   findWorkspace,
   getState,
+  setNotify,
   setSettings,
   setState,
   type Account,
@@ -1080,6 +1081,17 @@ export function Settings({ state }: { state: AppState }) {
             size="sm"
             testId="settings-use-cli"
             onClick={() => void setUseCli(!state.useCli).then(reload)}
+          />
+        </Row>
+        <Row
+          title="Notifications"
+          detail="While fx is in the background, a notification when a turn finishes, and a sound when one waits for your approval."
+        >
+          <Button
+            label={state.notify ? "Turn off" : "Turn on"}
+            size="sm"
+            testId="settings-notify"
+            onClick={() => setNotify(!state.notify)}
           />
         </Row>
         <Row
