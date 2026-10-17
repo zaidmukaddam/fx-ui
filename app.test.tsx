@@ -6609,8 +6609,10 @@ process.stdin.on("data", chunk => {
 
     await app.getByTestId("composer").fill("/")
     await app.getByTestId("mention-picker").waitFor()
-    await vi.waitFor(async () =>
-      expect(await app.getByTestId("mention-skill-11").count()).toBe(1),
+    // Twelve skills load from disk first; a cold release runner can take seconds.
+    await vi.waitFor(
+      async () => expect(await app.getByTestId("mention-skill-11").count()).toBe(1),
+      { timeout: 10_000 },
     )
 
     const picker = await app.getByTestId("mention-picker").element()
@@ -6623,7 +6625,7 @@ process.stdin.on("data", chunk => {
     expect(after?.[1]).toBeLessThan(before?.[1] ?? 0)
 
     await app.close()
-  })
+  }, 20_000)
 
   it("shows a delegated task as an expandable activity card, with its own tool calls nested inside", async () => {
     const { session } = seed()
