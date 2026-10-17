@@ -3,8 +3,8 @@ import type { FxHooks } from "libfx/node"
 import { cliRuntime } from "./cli"
 import { providerFetch, type SearchStep } from "./providers"
 import {
-  DEFAULT_MODEL,
   canAnswer,
+  gatewayDefault,
   getState,
   nativeSearch,
   setLimits,
@@ -36,7 +36,9 @@ export function backing(
   const provider = session.provider
 
   const search = nativeSearch(state, session)
-  const model = session.model ?? (state.useCli ? null : DEFAULT_MODEL.id)
+  const model = session.model ?? (state.useCli ? null : gatewayDefault(state).id)
+  // Token Pass covers no fast variants, so a Gateway turn on that key runs at standard speed.
+  const fast = session.fast && !(state.tokenPass && provider === null)
 
   return {
     search,
@@ -45,7 +47,7 @@ export function backing(
       fetch: providerFetch(globalThis.fetch, {
         provider,
         effort: session.effort,
-        fast: session.fast,
+        fast,
         search,
         onSearch,
         onUsage,

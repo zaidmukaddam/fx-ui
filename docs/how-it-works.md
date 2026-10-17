@@ -103,6 +103,19 @@ call, and translates the answer back. The session's `provider` decides where a
 turn goes, and the model id is the provider's own. Both sign-ins have exacting,
 undocumented requirements, written down in [PLATFORM.md](../PLATFORM.md).
 
+### Vercel Token Pass
+
+A Token Pass key is a Gateway key that only serves GLM 5.3 (`zai/glm-5.3`) and
+Kimi K3 (`moonshotai/kimi-k3`), and answers anything else with a 403. fx cannot
+tell the two kinds of key apart without spending a request, so Settings has a
+*Token Pass key* switch under the key. With it on, the picker and subagent
+overrides offer only those two among the Gateway's models, a new session starts
+on GLM 5.3, fast mode is off because Token Pass covers no fast variants, and the
+web search and vision tools are left out because they run on other models.
+`web_fetch` stays, since it calls no model. A 403 from Token Pass, such as the
+one for credit used up until the next billing period, shows Vercel's own
+message. Remaining credit is only on Vercel's dashboard; there is no API for it.
+
 ### The fx CLI as the core
 
 *Run through the fx CLI* points `createFxEngine` at `fx acp` through its

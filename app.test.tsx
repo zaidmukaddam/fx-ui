@@ -29,7 +29,7 @@ import {
   closeSession,
   send,
 } from "./src/agent/agent"
-import { compactionHooks } from "./src/agent/backing"
+import { backing, compactionHooks } from "./src/agent/backing"
 import { loadModels, refreshCredentials } from "./src/agent/credentials"
 import { COMPOSER_CARD_INSET } from "./src/views/composer"
 import {
@@ -130,6 +130,8 @@ import {
 import {
   ATTACHMENT_DIR,
   DEFAULT_MODEL,
+  TOKEN_PASS_MODELS,
+  usableModel,
   NO_CREDENTIAL,
   DIR,
   appendMessage,
@@ -1286,6 +1288,73 @@ describe("queued prompts", () => {
       ["user", "also check tests"],
       ["assistant", "second."],
     ])
+  })
+})
+
+describe("token pass", () => {
+  function tokenPass({ subscription = true } = {}) {
+    setState((current) => ({
+      ...current,
+      apiKey: "vck_token_pass",
+      tokenPass: true,
+      models: [
+        DEFAULT_MODEL,
+        ...TOKEN_PASS_MODELS,
+        ...(subscription ? [{ id: "grok-4.6", name: "Grok 4.6", provider: "grok" as const }] : []),
+      ],
+    }))
+  }
+
+  it("narrows Gateway models to the ones a Token Pass key serves", () => {
+    tokenPass()
+    const state = getState()
+    expect(usableModel(state, DEFAULT_MODEL.id, null)).toBe(false)
+    expect(usableModel(state, "zai/glm-5.3", null)).toBe(true)
+    expect(usableModel(state, "moonshotai/kimi-k3", null)).toBe(true)
+    expect(usableModel(state, "grok-4.6", "grok")).toBe(true)
+    setState((current) => ({ ...current, tokenPass: false }))
+    expect(usableModel(getState(), DEFAULT_MODEL.id, null)).toBe(true)
+  })
+
+  it("starts a session on GLM 5.3 instead of a model the key would refuse", () => {
+    tokenPass({ subscription: false })
+    const workspace = createWorkspace(tempDir(), "demo")
+    const earlier = createSession(workspace.id)
+    updateSession(earlier.id, (current) => ({
+      ...current,
+      model: DEFAULT_MODEL.id,
+      modelName: DEFAULT_MODEL.name,
+      provider: null,
+      fast: true,
+    }))
+    const session = createSession(workspace.id)
+    expect(session.model).toBeNull()
+    const back = backing({ ...session, fast: true })!
+    expect(back.options.model).toBe("zai/glm-5.3")
+  })
+
+  it("leaves out the tools that call other models", () => {
+    tokenPass()
+    const root = tempDir()
+    const session = createSession(createWorkspace(root, "demo").id)
+    const names = createTools({ sessionId: session.id, root }).map((tool) => tool.name)
+    expect(names).toContain("web_fetch")
+    expect(names).not.toContain("web_search")
+    expect(names).not.toContain("vision")
+  })
+
+  it("turns on from settings when a Gateway key is saved", async () => {
+    setState((current) => ({ ...current, apiKey: "vck_token_pass" }))
+    const workspace = createWorkspace(tempDir(), "demo")
+    openSession(createSession(workspace.id).id, 0)
+    const { app } = await mount()
+    await app.getByTestId("open-settings").click()
+    await app.getByTestId("settings-token-pass").click()
+    await vi.waitFor(() => expect(getState().tokenPass).toBe(true))
+    flushState()
+    const saved = JSON.parse(readFileSync(path.join(DIR, "state.json"), "utf8")) as { tokenPass?: boolean }
+    expect(saved.tokenPass).toBe(true)
+    await app.close()
   })
 })
 

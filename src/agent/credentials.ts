@@ -81,6 +81,13 @@ export async function refreshPlanLimits(): Promise<void> {
   if (limits) setLimits("grok", limits)
 }
 
+/** Agents rebuild their tool lists on restart, which drops or restores the
+ *  web search and vision tools a Token Pass key cannot run. */
+export async function setTokenPass(tokenPass: boolean): Promise<void> {
+  await restartAgents()
+  setState((current) => ({ ...current, tokenPass }))
+}
+
 export async function setUseCli(useCli: boolean): Promise<void> {
   await restartAgents()
   setState((current) => ({ ...current, useCli }))

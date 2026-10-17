@@ -16,8 +16,8 @@ import { mcpGrantLabel } from "../../workspace/mcp"
 import { attachImages, chooseImages, pasteImage } from "../../workspace/images"
 import { openExternally } from "../../workspace/open"
 import {
-  DEFAULT_MODEL,
   canAnswer,
+  gatewayDefault,
   sessionModel,
   updateSession,
   useApp,
@@ -88,7 +88,7 @@ export function ModelPicker({ session, maxWidth }: { session: Session; maxWidth:
           name: session.modelName,
         }
       : ready
-        ? { id: DEFAULT_MODEL.id, provider: null, name: DEFAULT_MODEL.name }
+        ? { id: gatewayDefault(state).id, provider: null, name: gatewayDefault(state).name }
         : null
 
   return (
@@ -112,8 +112,10 @@ export function ModelPicker({ session, maxWidth }: { session: Session; maxWidth:
 }
 
 export function FastToggle({ session }: { session: Session }) {
-  const tier = sessionModel(useApp(), session)?.fast
-  if (!tier) return null
+  const state = useApp()
+  const tier = sessionModel(state, session)?.fast
+  // Token Pass covers no fast variants.
+  if (!tier || (state.tokenPass && session.provider === null)) return null
   const on = session.fast
 
   return (

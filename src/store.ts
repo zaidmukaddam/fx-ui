@@ -205,6 +205,8 @@ export type AppState = {
   useCli: boolean
   /** Notify when a turn finishes or an approval waits while fx is in the background. */
   notify: boolean
+  /** The Gateway key is a Vercel Token Pass key, which serves only TOKEN_PASS_MODELS. */
+  tokenPass: boolean
   accounts: Account[]
   models: Model[]
   defaultModel: Chosen | null
@@ -279,6 +281,7 @@ function emptyState(): AppState {
     apiKey: process.env.AI_GATEWAY_API_KEY ?? null,
     useCli: false,
     notify: false,
+    tokenPass: false,
     accounts: [],
     models: [],
     defaultModel: null,
@@ -309,6 +312,7 @@ const PERSISTED = [
   "apiKey",
   "useCli",
   "notify",
+  "tokenPass",
   "models",
   "defaultModel",
   "usage",
@@ -556,6 +560,29 @@ export function answerable(current: AppState, provider: "grok" | "codex" | null)
   return provider !== null || apiKeySource(current) !== "none"
 }
 
+/** A Vercel Token Pass key serves only these models; anything else comes back as a 403. */
+export const TOKEN_PASS_MODELS: Model[] = [
+  { id: "zai/glm-5.3", name: "GLM 5.3" },
+  { id: "moonshotai/kimi-k3", name: "Kimi K3" },
+]
+
+/** Whether a model can answer here: its provider is signed in or keyed, and a
+ *  Token Pass key covers it when the Gateway serves it. */
+export function usableModel(
+  current: AppState,
+  id: string | null,
+  provider: "grok" | "codex" | null,
+): boolean {
+  if (!answerable(current, provider)) return false
+  if (provider !== null || !current.tokenPass) return true
+  return TOKEN_PASS_MODELS.some((model) => model.id === (id ?? gatewayDefault(current).id))
+}
+
+/** The Gateway model a session runs on when it names none. */
+export function gatewayDefault(current: AppState): Model {
+  return current.tokenPass ? TOKEN_PASS_MODELS[0]! : DEFAULT_MODEL
+}
+
 export function canAnswer(current: AppState, session: Session | null): boolean {
   if (!session) return false
   return Boolean(current.apiKey) || current.useCli || session.provider !== null
@@ -574,7 +601,7 @@ function startsOn(current: AppState, workspaceId: string): StartsOn {
   const mode = previous?.mode ?? "auto"
 
   const pinned = current.defaultModel
-  if (pinned && answerable(current, pinned.provider)) {
+  if (pinned && usableModel(current, pinned.id, pinned.provider)) {
     return {
       mode,
       model: pinned.id,
@@ -585,7 +612,7 @@ function startsOn(current: AppState, workspaceId: string): StartsOn {
     }
   }
 
-  if (previous && answerable(current, previous.provider ?? null)) {
+  if (previous && usableModel(current, previous.model ?? null, previous.provider ?? null)) {
     return {
       mode,
       model: previous.model,
@@ -1102,7 +1129,7 @@ export function forgetChildNotes(sessionId: string): void {
 
 export function sessionModel(current: AppState, session: Session | null): Model | null {
   if (!session) return null
-  const id = session.model ?? DEFAULT_MODEL.id
+  const id = session.model ?? gatewayDefault(current).id
   return (
     current.models.find(
       (model) => model.id === id && (model.provider ?? null) === (session.provider ?? null),

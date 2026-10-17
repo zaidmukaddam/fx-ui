@@ -2,7 +2,7 @@ import { Children, useRef, useState } from "react"
 
 import { version } from "../../package.json"
 import { reloadSkills } from "../agent/agent"
-import { refreshCredentials, setUseCli, signOutOfProvider } from "../agent/credentials"
+import { refreshCredentials, setTokenPass, setUseCli, signOutOfProvider } from "../agent/credentials"
 import { cliSignedIn, fxStatus, fxVersion, FX_BINARY } from "../agent/cli"
 import { useMountEffect } from "../ui/hooks"
 import {
@@ -31,8 +31,8 @@ import {
 import { loadSkills } from "../workspace/skills"
 import { checkForUpdate, relaunch } from "../update"
 import {
-  DEFAULT_MODEL,
   DIR,
+  gatewayDefault,
   apiKeySource,
   findSession,
   findWorkspace,
@@ -1033,6 +1033,23 @@ export function Settings({ state }: { state: AppState }) {
       <SetupBanner state={state} />
       <Section title="Models">
         <ApiKeyRow state={state} />
+        {apiKeySource(state) !== "none" ? (
+          <Row
+            title="Token Pass key"
+            detail={
+              state.tokenPass
+                ? "GLM 5.3 and Kimi K3 only. Web search and image reading are off, since they run on other models."
+                : "Turn on if the key above is a Vercel Token Pass key, which only serves GLM 5.3 and Kimi K3."
+            }
+          >
+            <Button
+              label={state.tokenPass ? "Turn off" : "Turn on"}
+              size="sm"
+              testId="settings-token-pass"
+              onClick={() => void setTokenPass(!state.tokenPass).then(reload)}
+            />
+          </Row>
+        ) : null}
         {(["grok", "codex"] as const).map((provider) => (
           <ProviderRow
             key={provider}
@@ -1047,7 +1064,7 @@ export function Settings({ state }: { state: AppState }) {
           detail={
             state.defaultModel
               ? "Every new session opens on this model, whatever the last one used."
-              : `A new session follows the last one in that workspace. The first opens on a signed-in subscription's own model, or ${DEFAULT_MODEL.name} on the Gateway.`
+              : `A new session follows the last one in that workspace. The first opens on a signed-in subscription's own model, or ${gatewayDefault(state).name} on the Gateway.`
           }
         >
           <ModelChoice

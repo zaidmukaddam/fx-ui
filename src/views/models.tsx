@@ -13,7 +13,7 @@ import { Icon } from "../ui/icons"
 import { color, nativeTheme, radius, space, text } from "../ui/theme"
 import { Label, fieldStyle, overlayStyle } from "../ui/ui"
 import { loadModels } from "../agent/credentials"
-import { answerable, useApp, type Chosen, type Model } from "../store"
+import { usableModel, useApp, type Chosen, type Model } from "../store"
 import { rank } from "./composer/shared"
 
 const MODEL_RESULTS = 80
@@ -64,7 +64,7 @@ export function ModelChoice({
 }) {
   const [query, setQuery] = useState("")
   const state = useApp()
-  const models = state.models.filter((model) => answerable(state, model.provider ?? null))
+  const models = state.models.filter((model) => usableModel(state, model.id, model.provider ?? null))
 
   const byKey = new Map(models.map((model) => [modelKey(model), model]))
   const haystack = new Map(

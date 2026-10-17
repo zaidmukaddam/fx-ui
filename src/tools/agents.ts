@@ -2,7 +2,7 @@ import { createFxEngine, type FxEngine, type FxNodeEngineOptions } from "libfx/n
 
 import { backing } from "../agent/backing"
 import {
-  answerable,
+  usableModel,
   findSession,
   forgetChildNotes,
   getState,
@@ -34,7 +34,7 @@ import {
 const MAX_SUBAGENT_DEPTH = 1
 
 function usableModels(state: AppState): Model[] {
-  return state.models.filter((model) => answerable(state, model.provider ?? null))
+  return state.models.filter((model) => usableModel(state, model.id, model.provider ?? null))
 }
 
 function exactModel(model: Model, want: string): boolean {

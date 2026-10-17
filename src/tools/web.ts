@@ -277,6 +277,9 @@ function webFetch(context: ToolContext): HostTool {
 }
 
 export function webTools(context: ToolContext): HostTool[] {
+  // Search and vision call SEARCH_MODEL / VISION_MODEL on the Gateway, which a
+  // Token Pass key refuses; fetching a URL needs no model.
+  if (getState().tokenPass) return [webFetch(context)]
   return [
     vision(context),
     ...(context.search ? [] : [webSearch(context)]),
