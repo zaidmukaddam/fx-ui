@@ -277,7 +277,10 @@ export function Explain({
   )
 }
 
-const FIELD_INK_TOP = 6
+/** GPUI's text input is a fixed-height row whose ink sits low in it; the field
+ *  shows a window onto that row, shifted so the ink is centred. Measured for
+ *  SF Pro: change it with the UI font. */
+const FIELD_INK_TOP = 3
 
 export function fieldStyle(size: number) {
   return {
@@ -285,7 +288,7 @@ export function fieldStyle(size: number) {
       display: "flex",
       flexGrow: 1,
       minWidth: 0,
-      height: Math.round(size * 1.15),
+      height: Math.round(size * 1.5),
       overflow: "hidden" as const,
     },
     text: {

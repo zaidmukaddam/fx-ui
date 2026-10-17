@@ -2,7 +2,7 @@ import { memo, useRef, useState } from "react"
 import { motion, useGpuix, type PublicInstance } from "@gpuix/react"
 
 import { type IconName } from "../../ui/icons"
-import { color, columnFor, FONT, space, text } from "../../ui/theme"
+import { color, columnFor, MONO, space, text } from "../../ui/theme"
 import { Button, Kbd, Label, Paragraph } from "../../ui/ui"
 import {
   canAnswer,
@@ -41,7 +41,8 @@ function Mark({ testId }: { testId?: string }) {
       testId={testId}
       style={{
         fontSize: text.small,
-        fontFamily: FONT,
+        // A character grid: it only lines up in a fixed-width face.
+        fontFamily: MONO,
         lineHeight: Math.round(text.small * 1.05),
         color: color.faint,
         whiteSpace: "nowrap",
