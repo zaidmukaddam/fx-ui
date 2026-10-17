@@ -112,7 +112,7 @@ function instructionsFor(root: string, tools: string[]): string[] {
       "- ask_user_question only when the choice is the user's to make.",
       "- capability_search before assuming something is missing; skill reads one in full.",
       "- vision reads an image file, such as a screenshot of a failing UI or a diagram.",
-      "- The git tools read; they never write. Commit, branch and push through shell.",
+      "- Commit with git_commit, and only when the user asks for a commit. Branch and push through shell.",
       "- Read git_diff before proposing a commit, and git_log for the project's commit style.",
       "- glob_files finds paths by name; grep_files finds text inside them.",
       "- A large result comes back as a preview and a handle: read_tool_result reads the rest.",

@@ -27,7 +27,8 @@ function gitMessage(stderr: string | undefined, fallback: string): string {
   return first.replace(/^fatal:\s*/, "")
 }
 
-async function repoGitDir(root: string): Promise<string | null> {
+/** The repository's git directory, or null unless `root` is that repository's top level. */
+export async function repoGitDir(root: string): Promise<string | null> {
   const top = await runGit(root, ["rev-parse", "--show-toplevel"])
   if (!top || top.code !== 0) return null
   try {

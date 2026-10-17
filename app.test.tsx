@@ -848,6 +848,64 @@ describe("git", () => {
     return root
   }
 
+  function committer(root: string, mode: PermissionMode) {
+    execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: root })
+    const workspace = createWorkspace(root, path.basename(root))
+    const session = createSession(workspace.id)
+    updateSession(session.id, (current) => ({ ...current, mode }))
+    const tool = createTools({ sessionId: session.id, root }).find((entry) => entry.name === "git_commit")!
+    return { session, tool }
+  }
+
+  const subjects = (root: string) =>
+    execFileSync("git", ["log", "--format=%s"], { cwd: root, encoding: "utf8" }).trim().split("\n")
+
+  it("commits what is staged", async () => {
+    const root = repo()
+    const { tool } = committer(root, "full-access")
+    writeFileSync(path.join(root, "kept.txt"), "one\ntwo\n")
+    execFileSync("git", ["add", "kept.txt"], { cwd: root })
+
+    expect(String(await run(tool, { message: "add two" }))).toContain("add two")
+    expect(subjects(root)).toEqual(["add two", "first commit"])
+  })
+
+  it("refuses an empty commit, and takes tracked changes with all", async () => {
+    const root = repo()
+    const { tool } = committer(root, "full-access")
+    writeFileSync(path.join(root, "kept.txt"), "one\nthree\n")
+
+    await expect(run(tool, { message: "nothing staged" })).rejects.toThrow(/Nothing is staged/)
+    await run(tool, { message: "add three", all: true })
+    expect(subjects(root)[0]).toBe("add three")
+    await expect(run(tool, { message: "again", all: true })).rejects.toThrow(/nothing to commit/)
+  })
+
+  it("does not commit when the staged changes move while approval is pending", async () => {
+    const root = repo()
+    const { session, tool } = committer(root, "ask")
+    writeFileSync(path.join(root, "kept.txt"), "one\nfour\n")
+    execFileSync("git", ["add", "kept.txt"], { cwd: root })
+
+    const pending = run(tool, { message: "add four" })
+    const approval = await waitForApproval(session.id)
+    expect(approval.detail).toContain("add four")
+    writeFileSync(path.join(root, "extra.txt"), "sneaked in\n")
+    execFileSync("git", ["add", "extra.txt"], { cwd: root })
+    resolveApproval(session.id, approval.approvalId, "allowed")
+
+    await expect(pending).rejects.toThrow(/moved while approval was pending/)
+    expect(subjects(root)).toEqual(["first commit"])
+  })
+
+  it("refuses to commit from a folder inside a repository", async () => {
+    const root = repo()
+    const inner = path.join(root, "inner")
+    mkdirSync(inner)
+    const { tool } = committer(inner, "full-access")
+    await expect(run(tool, { message: "nope" })).rejects.toThrow(/not the root of a git repository/)
+  })
+
   it("reads the branch and a clean tree", async () => {
     const status = await gitStatus(repo())
     expect(status?.branch).toBe("trunk")
