@@ -12,33 +12,43 @@ concurrency:
 jobs:
   lint:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           filter: blob:none
       - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
+        timeout-minutes: 1
       - run: cargo fmt --check
-      - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 1
+      - id: cache
+        uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --all-targets -- -D warnings
+        timeout-minutes: ${{ steps.cache.outputs.cache-hit == 'true' && 1 || 30 }}
 
   test:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           filter: blob:none
       - run: rustup toolchain install stable --profile minimal && rustup default stable
-      - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 1
+      - id: cache
+        uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test
+        timeout-minutes: ${{ steps.cache.outputs.cache-hit == 'true' && 1 || 30 }}
 
   package:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,12 +58,21 @@ jobs:
         with:
           python-version: '3.12'
       - run: rustup toolchain install stable --profile minimal && rustup default stable
-      - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 1
+      - id: cache
+        uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/cache@v4
+        with:
+          path: dist/dmg-background.png
+          key: dmg-background-${{ hashFiles('scripts/dmg-background.swift') }}
       - run: scripts/package.sh
+        timeout-minutes: ${{ steps.cache.outputs.cache-hit == 'true' && 2 || 30 }}
       - run: hdiutil verify dist/fx-*.dmg
+        timeout-minutes: 1
       - name: Verify packaged app
+        timeout-minutes: 1
         run: |
           hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/fx-dmg" dist/fx-*.dmg
           trap 'hdiutil detach "$RUNNER_TEMP/fx-dmg"' EXIT
