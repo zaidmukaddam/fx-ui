@@ -1,0 +1,7 @@
+#!/bin/sh
+# Runs the fast CI checks before a push: formatting and clippy.
+# Enable once per clone with: git config core.hooksPath .githooks
+
+set -e
+cargo fmt --check
+cargo clippy --all-targets --quiet -- -D warnings
