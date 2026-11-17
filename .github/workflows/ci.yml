@@ -51,7 +51,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: scripts/package.sh
+      - run: rustup show active-toolchain; rustc --version; ls ~/.rustup/toolchains
+      - run: PS4='+ $(date +%T.%N) ' bash -x scripts/package.sh 2>&1 | grep -E '^\+ [0-9]' | cut -c1-150
       - run: hdiutil verify dist/fx-*.dmg
       - name: Verify packaged app
         run: |
