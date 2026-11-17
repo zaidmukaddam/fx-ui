@@ -93,8 +93,11 @@ if [[ ${#notary[@]} -gt 0 ]]; then
   xcrun stapler staple "$app"
 fi
 
-# The install window: its background, then the image laid out around it.
-swift "$root/scripts/dmg-background.swift" "$dist/dmg-background.png"
+# The install window: its background, then the image laid out around it. The
+# background is drawn again only when its script is newer than the last one.
+if [[ ! "$dist/dmg-background.png" -nt "$root/scripts/dmg-background.swift" ]]; then
+  swift "$root/scripts/dmg-background.swift" "$dist/dmg-background.png"
+fi
 tools="$dist/dmg-tools"
 python3 -m venv "$tools"
 "$tools/bin/python" -m pip install --quiet --disable-pip-version-check -r "$root/scripts/dmg-requirements.txt"
