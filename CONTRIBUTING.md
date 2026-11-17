@@ -4,33 +4,34 @@ fx-ui is small, so there are only a few rules.
 
 ## Setup
 
-You need macOS on Apple silicon and [Bun](https://bun.sh) 1.4.2, the version CI
-uses. Bun 1.3 cannot read this lockfile and rewrites it along with unrelated
-packages, so don't commit a lockfile written by an older Bun.
+You need macOS, Rust 1.96 or newer, the Xcode command-line tools and the
+[fx](https://fx.sh) command-line tool.
 
 ```bash
-bun install
-bun run dev
+cargo run
 ```
+
+`archive/gpuix` holds the earlier GPUIX app. It is kept for reference and is
+not built, tested or released.
 
 ## Before you open a pull request
 
 ```bash
-bun run typecheck
-bun run test
-bun run build
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
-All three have to pass. The tests drive the real app through GPUIX's test
-renderer, against `.tmp-test-home` instead of your own `~/.fx-ui`.
+All three have to pass; CI runs the same commands.
 
 ## How the code is written
 
-- No comments. A measured platform fact goes in [PLATFORM.md](PLATFORM.md),
-  and the reason a feature works the way it does goes in
-  [docs/how-it-works.md](docs/how-it-works.md).
-- No `useEffect`. Work that runs once on mount uses `useMountEffect` from
-  `src/ui/hooks.ts`.
+- No comments. A measured platform fact goes in
+  [docs/platform.md](docs/platform.md), and the reason a feature works the way
+  it does goes in [docs/how-it-works.md](docs/how-it-works.md).
+- Keep the layers in [docs/architecture.md](docs/architecture.md): `fx/`,
+  `host/` and `design/` never import `app/` or `views/`, and views do not parse
+  what fx prints.
 - Match the code around you: its naming, its idioms, and how much it
   abstracts.
 
@@ -42,15 +43,15 @@ example, `fix: keep one store across hot reloads`.
 
 ## Releasing
 
-Bump `version` in `package.json`, commit it, then tag and push:
+Bump `version` in `Cargo.toml`, commit it, then tag and push:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The Release workflow checks that the tag matches `package.json`, runs the
-checks, then builds, signs and notarizes the DMG with `bun run package` and
+The Release workflow checks that the tag matches `Cargo.toml`, runs the
+tests, then builds, signs and notarizes the DMG with `scripts/package.sh` and
 publishes it as a GitHub release. It needs these repository secrets:
 
 | Secret | What it holds |
@@ -61,13 +62,13 @@ publishes it as a GitHub release. It needs these repository secrets:
 | `ASC_ISSUER_ID` | The issuer ID shown above the keys in App Store Connect |
 | `ASC_PRIVATE_KEY` | That key's `.p8` file, in base64 |
 
-`bun run package` on its own signs ad hoc. To sign and notarize locally, store
-the notary credentials in your keychain once, then name the identity and the
-profile:
+`scripts/package.sh` on its own signs ad hoc. To sign and notarize locally,
+store the notary credentials in your keychain once, then name the identity and
+the profile:
 
 ```bash
 xcrun notarytool store-credentials fx-notary --apple-id <apple-id> --team-id 8BN7M8YM4J
-SIGN_IDENTITY="Developer ID Application: Zaid Altaf Mukaddam (8BN7M8YM4J)" NOTARY_PROFILE=fx-notary bun run package
+SIGN_IDENTITY="Developer ID Application: Zaid Altaf Mukaddam (8BN7M8YM4J)" NOTARY_PROFILE=fx-notary scripts/package.sh
 ```
 
 ## Reporting a bug

@@ -4,3 +4,4 @@ tmp/
 screenshots/
 .tmp-test-home/
 .DS_Store
+target/

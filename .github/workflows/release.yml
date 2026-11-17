@@ -23,24 +23,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.2
-      - run: bun install --frozen-lockfile
-      - name: Check the tag matches package.json
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Check the tag matches Cargo.toml
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version=$(bun --print 'require("./package.json").version')
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           if [ "v$version" != "$RELEASE_TAG" ]; then
-            echo "Tag $RELEASE_TAG does not match package.json version $version"
+            echo "Tag $RELEASE_TAG does not match Cargo.toml version $version"
             exit 1
           fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             gh release view "$RELEASE_TAG" > /dev/null
           fi
-      - run: bun run typecheck
-      - run: bun run test
+      - run: cargo test
       - name: Import the Developer ID certificate
         env:
           CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
@@ -67,7 +63,7 @@ jobs:
         run: |
           export NOTARY_KEY="$RUNNER_TEMP/AuthKey.p8"
           echo "$ASC_PRIVATE_KEY" | base64 --decode > "$NOTARY_KEY"
-          bun run package
+          scripts/package.sh
           rm "$NOTARY_KEY"
       - name: Publish the release
         env:

@@ -2,517 +2,1640 @@
 
 The long version of the [README](../README.md): what each feature does, and why
 it works the way it does. What the platforms underneath do that you could not
-guess is in [PLATFORM.md](../PLATFORM.md).
+guess is in [platform.md](platform.md).
 
 ## The app
 
-The agent is [`libfx`](https://fx.sh/docs/lib), running in this process as a
-native addon, and the window is drawn on the GPU by GPUI, the renderer Zed
-uses, through [GPUIX](https://gpuix.dev). The embedded fx core has no
-filesystem, shell or built-in tools. It can only do what the host hands it, so
-this app supplies a set of tools scoped to one workspace directory. Commands
-wait for an approval you can see before they run, and so do edits in Ask mode.
+fx is a desktop app for the fx coding agent, drawn with GPUI. The agent is
+`fx acp`, the fx CLI speaking the Agent Client Protocol over stdio. fx owns the
+model, the tools, the providers and the permission modes. This app owns the
+window.
 
-The app is desktop-only. It needs the filesystem, a shell and the native libfx
-addon, so the browser target from the GPUIX starter was removed.
+The app is one `fx acp` process, the workspaces you opened, and every session
+in them. One entity, `FxApp`, owns all of it, so an ACP event has exactly one
+place to land and every view reads the same state. The state and what changes
+it sit in one module. The screens are further `impl FxApp` blocks, one per
+surface: the shell (titlebar, sidebar, header), home, the composer, the thread,
+the changes panel, the palette and settings.
 
-A Vercel AI Gateway key can be pasted in settings, or come from the
-`AI_GATEWAY_API_KEY` environment variable. Grok and Codex sign in from settings.
+`FxApp.folder` is the chosen workspace and `FxApp.active` is the open session,
+as a pair of workspace index and session index. A folder with no session open
+is home: `folder` is set and `active` is `None`. `show` sets the two together.
+`Page` says what fills the inset panel: a session or Settings.
 
-| Script | What it does |
-| --- | --- |
-| `bun run dev` | Start the app with hot remount |
-| `bun run build` | Compile a standalone binary into `dist/fx`, with libfx's addon and wasm inside |
-| `bun run package` | Wrap that binary in `dist/fx.app` with the fx icon, and the app in a DMG |
-| `bun run test` | Drive the app through the GPU test renderer with Vitest |
-| `bun run typecheck` | `tsc --noEmit` |
-| `bun run screenshot` | Drive the real window and write a PNG |
+### The command line
 
-## Features
+```
+fx-desktop [folder] [--prompt "<text>"]
+```
 
-### Workspaces
+The folder is added to the saved workspaces. The prompt is sent once a session
+is ready. With no folder and none saved, the app opens on first run.
 
-A workspace is a directory. Everything the agent reads, edits or runs stays
-inside it. Paths are resolved through the real filesystem, so a symlink cannot
-walk out either.
+The name the app calls you by is the first name on the Mac account ("Zaid"),
+read once from `id -F`. It falls back to `$USER` and then to "You".
+
+### Finding fx
+
+The app runs `fx` and `git` by name, with the `PATH` from `host::shell::path`.
+Started from Finder or the Dock, an app gets only `/usr/bin:/bin:/usr/sbin:/sbin`,
+where neither the fx installer's `~/.local/bin` nor Homebrew's folders are, so
+every launch from Finder used to fail with "could not start `fx acp`". When fx
+is not on the inherited `PATH`, the app asks your login shell for its `PATH`
+(`$SHELL -l -i -c printenv PATH`, given five seconds) and adds
+`~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin` if they are missing.
+This runs once, on a thread started first thing in `main`, so it is usually
+done before the window is. `FX_BINARY` still names fx exactly when set.
+
+When fx cannot start, home says why. If fx is not on that `PATH` at all, it
+shows the install command (`curl -fsSL https://fx.sh/setup.sh | bash`) with a
+Copy button, before the first-run screen. If fx exits because no account is
+signed in (its message mentions `fx login`), it says "No account connected"
+and offers the Models page. Anything else is "fx stopped", with fx's last lines.
+Settings rows that list fx's choices say "fx is not running" in that state
+rather than asking for a folder.
+
+### Keys and focus
+
+Esc closes whatever is on top, one layer at a time: the palette or a dialog,
+then a menu, then a popover, then Settings. With none of those up it rejects a
+waiting approval, and after that it stops a running turn. ⏎ confirms a confirm
+dialog.
+
+Focus is kept inside the app's one view: on the composer when it shows,
+otherwise on the root. `FxApp.focus` is a focus handle on the root that holds
+focus when no field does, so ⌘K and the other shortcuts still reach the root's
+action handlers on first run and on Settings. A confirm dialog (remove, discard,
+full access) takes the keys, so ⏎ confirms it and cannot send the draft
+underneath. The palette and the rename dialog focus their own fields, which are
+not drawn yet on the pass that opens them, so focus is left alone while they
+are up.
+
+While any turn runs the app redraws once a second, for the elapsed time.
+
+## The fx process, accounts and sessions
+
+### The ACP client
+
+fx brings its own tools, providers and permission modes, so the client
+advertises no capabilities. It sends `initialize` with
+`"protocolVersion": 1, "clientCapabilities": {}` and only has to answer one
+kind of request, `session/request_permission`. Everything else the agent says
+arrives as a `session/update` notification and is folded into `Update`. Any
+other request that carries an id, such as `fs/read_text_file`, is answered with
+JSON-RPC error `-32601` "not supported".
+
+fx's version comes from the handshake, at `agentInfo.version` in the
+`initialize` result.
+
+The child process handle is held on the client, so the process lives as long as
+the client does. When the app quits the pipes close and `fx acp` exits on the
+end of its input. The reader task holds an `Arc<Agent>` and so keeps the client
+alive for as long as fx's output stays open. Dropping the last handle elsewhere
+is therefore not enough to end the process. A session that moves to another
+process, or is removed, stops its old process explicitly with `Agent::stop`,
+which kills the child.
+
+When fx's stdout ends, every request still waiting is failed by clearing the
+pending map, which drops the senders, so no caller hangs on a dead process.
+Then `Event::Exited("fx stopped")` is sent. `Event::Exited` means the process
+ended and nothing more will arrive on the channel.
+
+Each fx process's events are forwarded into the app. A session's process ending
+is that session's problem, not the app's, so its exit is not passed on, and the
+next request to it reports the failure. Only the main process's exit marks the
+whole agent as failed.
+
+Two shapes come out of the fold that the rest of the app reads directly:
+
+- A `ToolCall` carries `name`, the tool's own name such as `shell` or
+  `write_file`; `kind`, ACP's coarse kind (`read`, `edit`, `execute`, `search`
+  and so on); and `input`, ACP's `rawInput`. A missing `status` is read as
+  `pending`.
+- A `ConfigOption` is a session setting fx exposes. The ids are `provider`,
+  `model`, `mode`, `effort` and `fast`.
+
+### One process per session
+
+One `fx acp` process keeps only one session live. Opening a second session in
+the same process makes fx refuse the first with "Session is not active". So
+each session has an fx process of its own (`Session.agent`), which is also what
+lets sessions run side by side on different accounts.
+
+A `Launch` is the account (provider) and model an fx process runs on, and the
+permission mode its sessions start in. It is passed as
+`fx acp --permission-mode <mode> --provider <provider> --model <model>`. Given
+at launch, the account and model hold for that process alone. Switching account
+inside a running process would rewrite fx's saved default for everything else.
+
+The mode is one of `ask`, `auto` or `full-access`, and the mode new sessions
+start in is the app's own default. It is passed at launch and not set on the
+session, because setting it on the session (`session/set_config_option`) would
+save it into fx's settings and so change the fx CLI too.
+
+`open_process` gives a session its own fx process on the launch's account and
+model, then creates the session in it, or reloads it there when `reload` is
+set. `find` names the session by id, and `None` is the one fx has not made yet.
+The session may have moved in the list while the process started, so it is
+looked up again by id each time.
+
+Your standing instructions, set in Settings, go to fx as the session is made.
+They are sent as `systemPrompt`, an array of text blocks. fx adds them after
+its own system prompt and they stay with the session. Blank instructions are
+not sent. The other defaults set in Settings are applied to the new session one
+option at a time, only where they differ from what fx gave it.
+
+`launch_of` gives the account and model a session last ran on, from the
+store's `ran_on`, as a launch for its process. It is fx's default when the
+session has not run here. `start_turn` records where a session runs so it can
+be reopened there. fx keeps the account choice for the process only, so
+reopening a session needs it from the store.
+
+### Idle sessions are put down
+
+Each opened session has a process of its own, and without a limit they pile up
+for as long as the app runs. `rest_idle` stops the fx process of every session
+that is doing nothing, except the ones named and the six you opened most
+recently (`FxApp.recent`, `WARM`). Six is cheap, about 12 MB each, and it makes
+going back to a recent session instant: its process and thread are still there.
+Sessions that are running, awaiting approval, awaiting a change tally, shown
+beside, empty or not yet created are left alone too.
+
+A stopped session keeps its name and its turns. The turns move to
+`Session.stale`, and `Session::turns` hands the view those until fx has
+replayed the session again, so reopening an old session shows its transcript
+at once instead of "Loading…" for the three seconds a reload takes. The
+composer's pills fill in when the reload lands. Switching a session's account
+replays it in place the same way.
+
+When the app quits it stops the process of every session that is not running
+(`stop_idle`). Left to end on their own, those processes save their sessions
+on the way out, which moves each one's "updated" time to now and reshuffles the
+list by nothing you did.
+
+### Accounts and the model catalogue
+
+An `Account` is one of fx's accounts (Codex, Grok, AI Gateway) and the models
+it offers. `FxApp.catalog` is every account fx knows and the models each
+offers, for the model menu. It is empty until fx has been asked.
+
+The app asks fx what each account offers with a short-lived process per
+account, because switching account inside one process would rewrite fx's saved
+default. The default account is asked first, and it also names the others,
+which are then asked all at once: each costs about three quarters of a second,
+and one after another that was over two seconds for three accounts. A
+session that never gets a prompt is not saved by fx, so opening one in each
+account's process just to read its model list leaves nothing behind.
+
+`account_of` gives the account that serves a model, known once fx has listed
+them. A default model saved before accounts were tracked has no account with
+it. Once the catalogue is loaded it says whose the model is, and the provider
+default is filled in and saved.
+
+`saved_models` reads the `models` map in `~/.fx/settings.json`, which is the
+model fx last used on each account. A process started for an account opens on
+that model.
 
 ### Sessions
 
-Each workspace holds any number of conversations. History is saved as a libfx
-checkpoint, so a session resumes after a restart. The first prompt names the
-session straight away, and a short request to the model, sent alongside the
-first turn, replaces that with a proper title. If the request fails, the next
-message tries again. Click the title in the pane header, or use *Rename this
-session* in the palette, to name it yourself; a generated title never
-overwrites a name you set. A session you leave without sending anything is
-dropped, not kept.
+A `Session` has no `id` until fx has created it. `saved_title` is fx's title
+from the saved list, shown before the history is loaded. `loaded` says whether
+the history has been replayed into the thread. A listed session is loaded when
+it is opened, not before. `SavedSession.updated` is the `updatedAt` time in
+RFC 3339, as fx writes it.
 
-### Split view
+A session with nothing said in it yet is the composer on home, not a row in a
+list (`Session::is_empty`). A session fx listed has a title from fx, so it is
+never empty, even in the moment its history is still loading. Empty sessions
+are left out of the sidebar, the counts and the tabs.
 
-Two panes, each on its own session, with a draggable divider. `⌘\` opens and
-closes it. The pane the keyboard talks to keeps its title at full brightness
-while the other dims.
+Starting a new session reuses an untouched one instead of piling up empty ones.
+The default account and model are given to the process as it starts, and the
+other defaults are set once the session exists. A model is only passed together
+with the account that serves it. Alone it would be asked of whichever account
+is fx's default.
 
-### Command palette
+When the session list is refreshed, what is open is remembered by id across the
+refresh, because the sort moves indexes. Sessions sort newest first. A session
+made this run has no timestamp yet and sorts as newest: its sort key is "~",
+which sorts after any RFC 3339 timestamp. The lists are re-sorted as fx reports
+sessions, so async work finds its session again by id with `locate`.
 
-`⌘K` searches commands, workspaces and sessions.
+Opening a listed session replays its history into its thread, in a process of
+its own on the account it last ran on, or fx's default.
 
-### Notices
+Removing a session takes it off the list only. fx keeps it, its id goes into
+the store's `hidden`, and it joins the workspace's `archived` sessions. Home's
+Archived tab puts it back on the list and opens it.
 
-The app's own messages, like a stop reason or a catalogue that would not load,
-sit in the transcript. Dismiss one with the × on the row, or *Clear notices* for
-a screenful. A request the provider turns down shows here as an error, not as
-the model's reply. A missing-credential error stays on the session and offers
-Settings; it does not replace the conversation with the settings page. Sign-in
-state is not among them. It belongs to settings, which shows it as it is now
-rather than as of an hour ago.
+### Switching model or account
 
-### Settings
+Using a model on the session's own account is one option change. On another
+account the session moves to a new fx process started for that account, which
+leaves every other session and fx's saved default as they were. If nothing has
+been said yet, a new session on the new account takes its place with the same
+defaults. Otherwise the session is reloaded there. A running turn must be
+stopped first.
 
-The gear in the sidebar footer, `⌘,`, or the palette opens it. It is a full
-page in place of the panes, with the Gateway key, the sign-ins, the model new
-sessions start on, which runtime answers a turn, and the skills and MCP servers
-that are loaded. Esc or Done leaves it; opening a session does too. It reads
-from disk each time it opens, because a sign-in is a file, not something the
-app's state can derive. If nothing can answer yet, a banner at the top of the
-page says so.
+`reload_session` starts a session's fx process afresh. fx replays the history
+as it reloads, so the thread starts empty and fills back in.
+
+### Notifications
+
+A macOS notification is sent through `osascript`, with the title "fx" and the
+session's name as subtitle. It is sent only while fx is in the background and
+only if Settings has not muted them. The store's `mute` is off by default, so
+notifications come when a turn needs you or finishes.
+
+## Sending a turn, steering and the queue
+
+### Sending
+
+`submit` sends what the composer holds to the active session. With nothing
+running it starts a turn. While a turn runs, plain text steers it. Images and
+skill commands (`/…`) need a turn of their own, so they wait in the queue. It
+returns false when there is nothing to send or the session cannot take a prompt
+yet. A session is not ready until its fx process has made or loaded it. ⏎ on an
+empty composer sends the next queued prompt.
+
+`Agent::prompt` sends a prompt as text blocks and image blocks and waits for
+the turn to end. It returns the stop reason, read as `end_turn` when fx gives
+none.
+
+`/name rest` becomes a request to follow that skill: "Use the `name` skill:
+read <path> first and follow it." fx reads the file itself, so the prompt
+carries the path, not the text.
+
+The round button in the composer sends when there is a draft (non-blank text or
+at least one attached image) or when no turn is running. While a turn runs and
+nothing is drafted it becomes stop, a 10px square. So with something written
+during a running turn, the button sends it into the running turn instead of
+stopping it.
+
+### Steering
+
+Steering is text said into the running turn. It waits above the composer
+(`Session.steering`) until the model reads it, when fx sends it back as your
+user message. That echo is how the app knows the text no longer waits.
+
+`Steered` says what became of a steering message. `Absorbed` means the turn
+read it. `Dropped` means you stopped the turn first. `Missed` means the turn
+ended by itself first, so the text must be sent as a prompt of its own. Text
+that was not read goes to the head of the queue: stopping keeps it there, and a
+turn that ended by itself gets it as its next prompt.
+
+In the transcript, steering closes the turn in hand and starts one on the new
+prompt (`Thread::open_turn`). The work so far folds away under its own "Worked
+for", and the new turn inherits `timed` so the clock keeps running.
+
+### The queue
+
+`Session.queue` is the prompts waiting for the running turn to finish, in
+order. Each `Queued` is what you typed plus the images that go with it.
+
+`start_turn` starts a turn in a session with nothing running, and returns false
+when the session cannot take a prompt. Only a turn that finished by itself
+(`end_turn`) sends the next queued prompt. A stop, an error or a limit leaves
+the queue alone.
+
+### Retries
+
+`Recovery` is fx trying a model request again: `attempt` is how many times so
+far and `message` is why. `Update::Recovery(None)` means the retrying has
+stopped. `Thread.recovery` is set while fx is trying.
+
+### What waits above the composer
+
+Above the composer card sits what is waiting:
+
+- The line that says fx is trying a request again. It reads "Retrying", or
+  "Retrying · attempt N" from the second attempt, with fx's message.
+- The words said into the running turn that the model has yet to read, labelled
+  "Steering", with a spinner.
+- The prompts queued behind the turn, labelled "Next" for the first and "Then"
+  for the rest. A queued prompt shows its first line, or "Images" when it has
+  no text, plus an image count, and a × on hover that removes it from the
+  queue.
+
+## The transcript and work log
+
+### Folding updates into turns
+
+A session's transcript is folded from ACP updates into turns, and the view
+never reads raw updates. A turn is your prompt and everything fx did in answer
+(prose, thoughts and tool calls, in order), so the view can collapse the work
+into "Worked for 1m 12s" and show the answer under it.
+
+The answer is the prose after the last tool call (`Turn::answer`). Everything
+before it, tool calls and the narration between them in order, is the work
+(`Turn::work`), which is what "Worked for" folds away. Narration before a tool
+stays with the work and is not lost.
+
+A user message opens a new turn, unless the current turn has no answer yet (no
+items and not ended), in which case it joins that turn's prompt. Said into a
+live (timed) turn before it answered, it becomes a second paragraph of the
+prompt, joined with a blank line, not more of its first paragraph. In replayed
+history the chunks are appended as they come.
+
+`Update::UserImage` is an image you sent, replayed with the history, as its
+MIME type and its bytes in Base64. An image joins the current turn when that
+turn has no answer yet. Otherwise it opens a turn with an empty prompt, so an
+image sent with no words still gets its own turn.
+
+`Update::Notice` is fx's own start-of-turn diagnostics, which are context notes
+and the skills it skipped. Settings shows the skills, and the transcript shows
+neither.
+
+After a load has replayed history, nothing in it is still running, so
+`Thread::settle` gives every turn without an end one.
+
+`Turn.timed` is true when the turn ran in this app, so its start and end times
+are real. History replayed from fx carries no times, so replayed turns are
+untimed. A duration reads "1m 12s" from 60 seconds up, and "24s" below.
+
+`Thread.usage` is the context tokens used and the context window size, from
+fx's `usage_update`s.
+
+`Turn.stop` is set only when the turn ended for a reason other than finishing.
+
+| Stop reason | Reads |
+| --- | --- |
+| `cancelled` | "Stopped" |
+| `max_tokens` | "Stopped at the output limit" |
+| `refusal` | "The model declined to answer" |
+| anything else | the reason with underscores turned to spaces |
+| an error | its own text |
+
+### What a draw costs
+
+`FxApp` is one view, so every draw rebuilds and lays out the whole window. A
+live profile of a streaming answer put the time in the layout pass, not in this
+app's code, so the first thing that matters is how often the window draws.
+
+- The spinner does not use GPUI's animation, which asks for a frame at the
+  display's full rate (120 a second on a ProMotion screen). `spinner_in` turns
+  the arc by the clock and raises a flag, and a `pulse` task in `FxApp` redraws
+  every 33 ms while the flag keeps coming back. With no spinner on screen the
+  pulse only looks every 250 ms.
+- Stream updates are held to the same rate. `on_event` applies each update at
+  once but draws at most every 33 ms; anything held back is drawn by the next
+  pulse. A turn ending, an approval and everything else still draw at once.
+
+Together these took a streaming answer from 25 to 45% of a core to about 14%.
+Three more things keep each draw cheap.
+
+- Parsed markdown is cached by its text (`parsed`), as code colours already
+  were. Parsing was two thirds of the cost of drawing an answer: 0.55 ms for a
+  4 KB answer with code and a table, 0.13 ms once cached. Both caches keep two
+  generations (`Recent`), so what was drawn last frame is never thrown away
+  when the cache turns over, and a streaming answer, which is new text on every
+  chunk, cannot push the finished turns out.
+- An edit step's `+n −n` is cached by its old and new text (`edit_stat`), since
+  working it out is a line diff.
+- Turns more than 1000px beyond the window are not built. The column reports
+  each turn's place and height after layout (`on_children_prepainted`, kept in
+  `Seen`), and on the next draw `spaces` swaps a far-off turn for an empty box
+  of that height. The last two turns and a running turn are always built. The
+  heights belong to one session at one width: a different session starts
+  again, and a change of width throws them away and draws once more with
+  everything built, because wrapped text changes height. The scroll position
+  read while building is clamped to the content first, and if layout still
+  shows a skipped turn inside the window the frame is drawn again; without
+  both, one long flick to the top drew an empty thread.
+
+`cargo test costs_per_draw -- --ignored --nocapture` prints these costs.
+
+### A turn on screen
+
+A session's transcript is drawn as the "full agent run" artboard draws it: the
+prompt bubble; the work as a timeline of tool calls with what fx said between
+them, folded into "Worked for 1m 12s" once done; the answer; the files the turn
+changed; and the approval card when fx asks before it acts.
+
+Your message sits at the right, with the images you sent under it as 96 by 72
+thumbnails.
+
+A running turn shows the last 6 lines of its log as they happen, narration
+included, so nothing fx says is lost between one call and the next.
+
+A finished turn reads "Worked for 1m 12s" only when it was run here and took at
+least a second, and "Worked · N actions" otherwise, because history loaded from
+fx carries no timings. Under a finished answer sits a copy button and a note of
+what answered in how long. Only a turn run here knows what model answered it
+and how long it took, so replayed turns show the copy button alone.
+
+A listed session with no turns yet is one fx is still replaying, so it reads
+"Loading…". An error notice stays until you dismiss it.
+
+The composer floats over the thread, so the thread pads its bottom by 146px,
+which is the two-line composer plus 16px of clearance for the last turn. On top
+of that goes what sits on the composer: 6px plus 30px for each row waiting
+above it (steering messages, queued prompts and the recovery row), and 60px for
+the thumbnails inside it when there are attachments. A short thread is
+bottom-aligned so it sits just above the composer, as drawn.
+
+### The work log
+
+`Entry` is one line of the work timeline:
+
+- `Say(text, item index)` is something fx said between steps and the item it
+  came from.
+- `Thought` is the model's reasoning, shown as one quiet row until opened,
+  since it is long and rarely what you came to read.
+- `Step` is a tool call. `more` counts the like calls folded behind it, and
+  `group` is the key (the item index of the run's first call) that opens them,
+  set only on the row that toggles.
+- `Output` is the tail of a failed call's output, or a subagent's report.
+
+The log lists narration as it came and folds runs of the same kind of call into
+one line ("Read src/shell.rs +2 more") until opened. A failed call always
+stands alone and shows why. Reasoning that arrived in pieces is still one
+thought, so consecutive thought items are joined with a blank line. Work handed
+to a subagent is a step of its own, never folded in with the calls that wait on
+it. A failure shows its output and a subagent shows what it reported back.
+Either way only the last 6 non-empty lines are kept.
+
+`Session.expanded` is the turns whose "Worked for" row is open.
+`Session.open_steps` is the runs of like tool calls that are opened into a log,
+keyed by (turn, first item). `toggle_steps` opens or folds a run of like calls,
+or a thought, by turn index and item index.
+
+`summarize` gives a call's verb and what it acted on: "Ran" and "cargo check",
+"Edited" and "src/app.rs". Work for a subagent reads as the agent's name and
+the first line of the task. The subagent calls that only wait on subagents or
+check them read as "Subagents" plus the title fx gives them. A question reads
+as "Asked" plus its text. On a step row, the call in hand reads in the present
+("Editing", not "Edited"), and a failed call reads "Failed". The lines an edit
+adds and removes are shown only when the call carries both sides (`old_string`
+or `old_text`, with `new_string` or `new_text`).
+
+`doing` is what a running turn is on right now, short enough for a list row:
+"Reading shell.rs", "Running cargo check". A path reads as its file name (kinds
+read, edit, delete) and a command as its first line. Once the last call settles
+the turn reads "Working" again, because it is thinking.
+
+The timeline is one row per entry. The 16px lane at its left, the gutter, holds
+an icon, joined to the step above and below by a 1px hairline when there is
+one. Steps and thoughts are joined to their neighbours by that line. An opened
+thought hangs its reasoning under its row, so the line down to the next step is
+left out, since it would cut through the text.
+
+### The files a turn changed
+
+`Workspace.status` is `git status` against HEAD, refreshed when a turn ends.
+Turns show the files they touched from it, and the header shows its total.
+
+`touched` returns the changed files a turn edited, as they stand against HEAD
+now, not what the turn itself wrote. It returns nothing while the turn is still
+running. Only calls of kind "edit" or "delete" count, and the file is read from
+the call's `path` or `file_path` input, made relative to the workspace folder.
+
+Only the latest turn carries the files card, once it has finished: the working
+tree shows where things stand now, not what each turn did. The card reads
+"3 files changed +169 −18" over one row per file. Review opens the changes
+panel, and does nothing when the panel is already open, so it never closes it.
+
+`Session.tally` is `git status` as a prompt began, and the index of the turn it
+began at. Once the prompt ends and status is read again, the difference is what
+the prompt changed. `delta` measures the lines a prompt's turns added and
+removed as how far the files they edited moved against HEAD between the two
+readings. A file new to the status counts in full.
+
+A turn that has ended adds what it changed to its session's count, which home
+shows on the row. Steering splits one prompt's work over several turns, so the
+count covers every turn from the one the prompt began at. A queued prompt can
+start before the last one's changes are counted. Then both are counted together
+from the first, because the tally is only set if none is pending. The count is
+kept in the store's `changes`, as the lines stood against HEAD when the
+session's last turn ended.
+
+## Approvals and questions
 
 ### Approvals
 
-Writes and commands stop and ask, with the diff or the exact command line in
-front of you. The three answers mirror fx's own prompt: yes, yes and don't ask
-again, and no. What a session may now do without asking is listed under the
-permission mode in the composer footer, which shows a shield while there is
-any, and each entry can be forgotten there. *Forget what this session may do
-without asking* in the palette clears them all.
+`Event::Permission` means the agent wants a yes or no before running a tool.
+`request` is the JSON-RPC id of fx's request, and the answer goes through
+`Agent::answer_permission` with that same value passed back as the response id.
+The answer is `{ "outcome": { "outcome": "selected", "optionId": <id> } }` or
+`{ "outcome": { "outcome": "cancelled" } }`.
+
+The approval card shows the question, exactly what fx will run or change, and
+the three answers: always allow, deny and allow once. The question depends on
+the call's kind.
+
+| Kind | Question |
+| --- | --- |
+| `execute` | "Run this command?" |
+| `edit` or `delete` | "Make this change?" |
+| `fetch` | "Fetch this?" |
+| anything else | "Allow this?" |
+
+An edit shows the file and its +/− over the diff as one block, capped at 40
+lines with a "more" row. A command or anything else shows the line itself, a
+command behind "$ ". `edit_preview` works out what an edit will do to the file.
+A whole-file write (a `content` input beside a path) is diffed against the file
+on disk with 3 lines of context. A replacement (`old_string` or `old_text`,
+with `new_string` or `new_text`) shows its two sides in full. Other tools have
+nothing to preview.
+
+For a command the always-allow button reads "Always allow" plus the command's
+first two words, as the design names it ("Always allow cargo check"). For
+anything else it reads "Always allow in this session".
+
+`answer_in` answers the approval a session is waiting on, whether the session
+is open or not, because home answers from its card. The answer goes back to the
+process that asked. With an approval waiting and nothing typed, ⏎ answers it
+with "allow once".
+
+### What a session may do without asking
+
+An "always allow" is recorded as a grant in plain words, phrased as you would
+say it: "Run <first two words of the command>", "Edit files", "Delete files",
+"Fetch from the web", or "Use <tool name>". `Session.grants` is that list. fx
+has no list of what it granted, so the app keeps its own, and closing the old
+process is how fx forgets: `forget_grants` reloads the session for exactly
+that.
+
+The grants are listed under the modes in the permission menu, on a darker
+footer (`background_200`), and only when there is at least one. The footer is
+headed "Allowed in this session" and has a single "Forget all" and no "Forget"
+on each row, because fx can only take back all of them at once.
+
+### Questions
+
+`asked` reads the question the model put to you in a turn, its text and the
+answers it offered, from the last `ask_user_question` call in that turn. It
+yields nothing when no answers were offered.
+
+The question the last turn left you with stays until you answer or skip it
+(`Session::question`). It yields the turn it is in, what it asks, and the
+answers on offer. It is withheld while the turn runs, while an approval is
+pending, and while prompts are queued. `Session.skipped` is the turn whose
+question you skipped, and its question card stays away.
+
+The question is drawn as a card with each answer the model offered on a row of
+its own, numbered for the keyboard, plus "Something else…" as the way out to a
+typed answer (it focuses the composer) and Skip. With a question on screen and
+nothing typed, pressing its number answers it. This is ignored on Settings,
+with the palette, a dialog or a popover open, or with a modifier held.
+
+## The composer
+
+The composer is the text field, the row of pills under it, and everything that
+opens above it: the `/` skills list and `@` files list, the attach menu, the
+permission (mode) menu, the model menu, the thinking menu and the context
+meter's popover. All of them float over the thread (`absolute` with
+`deferred(..).with_priority(1)`), and none of them pushes the layout.
+
+The composer itself floats over the thread, which scrolls on under it: no band,
+no hard edge. The thread dissolves into the panel's ground as it nears the
+composer, through a 56px gradient to 86% opacity.
+
+The card's top padding is 10px when thumbnails are shown and 14px for text
+alone. Its background is `gray_100` at 0.94 opacity, a touch see-through, so a
+thread scrolling under it shows as a ghost. A press anywhere in the card puts
+the caret in the text field, not only a press on the line the text is on.
+
+The placeholder depends on the session. A new session asks for a change:
+"Describe a change. @ to attach files, / for skills". An open one asks for a
+reply: "Reply to fx, or type @ for files and / for skills". `FxApp.hint` is the
+placeholder last set, so render only sets it when it changes.
+
+Setting the draft from code moves the caret to the end, so typing carries on
+from there.
+
+### The toolbar
+
+Everything in the toolbar is 32px tall and fully round (16px radius): the pills
+(`pill`) and the send or stop button (`round_button`). The order left to right
+is attach (+), permission mode, a flexible gap, model, thinking, branch (home
+only), context ring (in a session only), send.
+
+On home, meaning no session or a session with no turns, the git branch sits in
+the toolbar. Once a session has turns the header carries the branch and the
+context ring takes its place in the toolbar. The ring is hidden on home even if
+usage is known.
+
+`choice_name` gives the name of an option's current choice for a pill, and "…"
+until it is known.
+
+### Popovers
+
+`Pop` names the composer's popovers (attach, mode, model, thinking, usage), and
+`FxApp.pop` is the one that is open, if any. A pill's click opens its popover,
+or closes it if it is open, and always closes the `/` or `@` picker.
+
+The card every composer menu sits in (`pop_card`) closes on a mouse press
+outside it. It occludes, so presses do not fall through to the thread. A press
+on a pill while its own popover is open is first seen by the popover as a
+mouse-down outside, which closes it and records it in `FxApp.just_closed`. The
+click that follows on release must then not reopen it, so `pop_toggle` takes
+`just_closed` and returns early when it names the same pill. `just_closed` and
+its counterpart for menus, `menu_closed`, are both cleared on the next
+mouse-down anywhere, captured at the root.
+
+Menus open 6px above the pills: `pop_card` is absolutely placed 48px from the
+composer's bottom.
+
+| Popover | Width | Opens from |
+| --- | --- | --- |
+| Attach | 220px | the left edge |
+| Permission | 340px | 40px in from the left |
+| Model | 360px | the right edge |
+| Usage | 300px | the right edge |
+| Thinking | 300px | over its own pill: the right edge on home, 72px in once a session has turns, which is past the send button and the context ring |
+
+### Models
+
+The model pill shows the account's logo (from the session's `provider` option,
+through `account_logo`) and then the model's name.
+
+`model_name` turns an id into a name: "deepseek/deepseek-v4.1-flash" reads as
+"Deepseek V4.1 Flash". Names fx already writes for people, containing a space
+and no slash, pass through. "gpt", "glm", "ai", "llm" and "oss" are
+upper-cased.
+
+The menu lists every account's models in catalogue order, and picking a model
+of another account moves the session to that account. One row (`ModelRow`) is
+the account it belongs to (id and display name), whether that account is usable
+(`connected`), and the model choice. Until fx has listed the accounts only the
+session's own models are shown, under the heading "Models". For the session's
+own account the live `model` option's choices are used, not the catalogue's
+copy.
+
+An account counts as connected when it is the session's own, when it is a
+custom connection, or when it is in the settings' `signed_in`. A connection set
+up in fx's settings has no sign-in of its own, so it is always ready. Only the
+three built-in accounts need their credential. A custom connection is
+recognised by `account_logo` returning `None`.
+
+The menu opens on a focused search field, with the arrow position
+(`ModelSearch::at`) starting on the model in use. `FxApp.model_search` exists
+only while the model menu is open. Render drops it when the menu is not open,
+and dropping it hands focus back to the composer. What the menu lists for what
+is typed is the models of connected accounts whose display name, id or account
+name contains the query, case-insensitively. Typing resets the position to the
+first result. ↑ and ↓ move through the results, wrapping, while the field has
+focus (handled with `capture_key_down` on the menu). ⏎ uses the model the
+arrows are on.
+
+The list scrolls, to at most 320px, while the search field above and the key
+hints below stay put. Each account's logo and name head its models. Accounts
+with no sign-in appear at the end with a "Sign in" link that opens Settings →
+Models, but only when nothing is typed. The typed letters are shown in semibold
+where the model's name contains them. A row's right edge shows a check for the
+model in use, "⏎" for the aimed row while searching, and otherwise the maker.
+The footer counts "N models", or found of total while searching.
+
+### Thinking and speed
+
+The thinking pill sits beside the model pill and only exists when the session
+has an `effort` option. Thinking effort is drawn as four rising bars, with
+heights of 4, 7, 10 and 13px, each 2.5px wide in a 14px box: none lit for off,
+all four for the most. The pill and the thinking menu's rows use the same
+glyph, and unlit bars are `gray_500`.
+
+`thinking(value, name)` returns `(rank, lit, label, about)`: where the level
+sorts in the menu (least thinking first), how many of the four bars it lights,
+the name shown, and the line that says what it means. The level's id alone
+decides all four.
+
+| Id | Rank | Bars lit | Name | What it says |
+| --- | --- | --- | --- | --- |
+| `default`, `auto` | 0 | 0 | Default | What the model prefers |
+| `none`, `off` | 1 | 0 | Off | Answers straight away |
+| `minimal` | 2 | 1 | Minimal | Barely pauses |
+| `low` | 3 | 1 | Low | A brief think first |
+| `medium` | 4 | 2 | Medium | For everyday changes |
+| `high` | 5 | 3 | High | Longer on hard problems |
+| `xhigh`, `max` | 6 | 4 | Max | As long as it takes |
+| anything else | 7 | 0 | fx's own name, through `model_name` | nothing |
+
+"default" sits outside the scale: it sorts first and lights no bars. A level id
+this app has not met sorts after all the rest, lights none and has no
+description.
+
+The menu lists the levels with the least thinking at the top and the most at
+the bottom, sorted by that rank and not by the order fx gives. Under them sit
+the speed switches "Fast mode" and "Ultrafast". The first one present gets the
+top border that separates the switches from the levels. A switch toggles by
+setting the option to its other choice, the first choice whose value is not the
+current one. A bolt icon on the pill is lit when either speed option (`fast` or
+`ultrafast`) is on, where "on" means the option's current value is `"on"` or
+`"true"`.
 
 ### Permission modes
 
-`ask`, `auto` and `full access`, mapped from
-[fx's modes](https://fx.sh/docs/configure-fx/permissions). `auto` runs edits and
-still asks before a command.
+Permission modes are listed least trusting first (`ask`, `auto`, `full-access`)
+whatever order fx lists them in. A mode the app does not know sorts before
+those three, since its sort key is `None`. The app describes `auto` as "A
+safety review decides instead of you".
 
-### Grok and Codex sign-in
+Choosing `full-access` when it is not already on does not set it. It opens the
+`Dialog::FullAccess` confirmation first, which holds the mode option's id, and
+the dialog sets it.
 
-Settings signs in to either with a PKCE flow against `auth.x.ai` or
-`auth.openai.com`, and offers that subscription's own models. The addon libfx
-loads is built for the Gateway only, so the routing happens in the `fetch` the
-host supplies. [src/agent/providers.ts](../src/agent/providers.ts) intercepts
-the one model request the core makes, translates it into an OpenAI Responses
-call, and translates the answer back. The session's `provider` decides where a
-turn goes, and the model id is the provider's own. Both sign-ins have exacting,
-undocumented requirements, written down in [PLATFORM.md](../PLATFORM.md).
+### Context and plan usage
 
-### Vercel Token Pass
+The context ring is an 18px canvas: a `gray_400` circular track of radius 6.3px
+and stroke 1.8px, with the used share drawn over it clockwise from the top in
+`gray_900`, turning `amber_700` past 80%. The fraction is clamped to 0.02 to
+0.999. No reason is recorded for the clamp. A guess is that an empty window
+then still shows a dot, and a full one does not make the arc's start and end
+points coincide.
 
-A Token Pass key is a Gateway key that only serves GLM 5.3 (`zai/glm-5.3`) and
-Kimi K3 (`moonshotai/kimi-k3`), and answers anything else with a 403. fx cannot
-tell the two kinds of key apart without spending a request, so Settings has a
-*Token Pass key* switch under the key. With it on, the picker and subagent
-overrides offer only those two among the Gateway's models, a new session starts
-on GLM 5.3, fast mode is off because Token Pass covers no fast variants, and the
-web search and vision tools are left out because they run on other models.
-`web_fetch` stays, since it calls no model. A 403 from Token Pass, such as the
-one for credit used up until the next billing period, shows Vercel's own
-message. Remaining credit is only on Vercel's dashboard; there is no API for it.
+The ring's popover spells out how full the context window is ("Nk / Nk", with
+"fx summarises older turns at N%.") and then one meter per plan window of the
+account: "<account> · 5-hour limit", "N% used", "Resets …". The account name
+drops a trailing " subscription": "Codex subscription" is the account, but its
+limits are just Codex's.
 
-### The fx CLI as the core
+fx has to be asked for the plan limits (`usage_report("7d", Some(account))`),
+and it is asked again every time the popover opens because the numbers move. If
+the cached plan belongs to a different account it is cleared before the fetch,
+and the plan is shown only if the cached report is for the session's current
+account, so stale limits are never shown under the wrong name. The same
+background task reads fx's profile at `~/.fx/settings.json`, because it says
+when older turns get summarised (`auto_compact_percent`). It is stored only if
+Settings has not already read it.
 
-*Run through the fx CLI* points `createFxEngine` at `fx acp` through its
-`runtimeFactory`. That is the same core built with every provider, answering to
-whatever `fx login` stored in `~/.fx`, which helps with a sign-in this app does
-not carry. Tools, approvals, skills, MCP and checkpoints ride on the same ACP
-messages either way. Transport diagnostics are lost, since the CLI makes its
-own requests. It needs fx 0.0.7 or newer. libfx's native backend currently
-overrides that factory, so wherever the addon loads the setting has no effect;
-see [PLATFORM.md](../PLATFORM.md).
+One block of the popover (`meter`) is a label, a value, a 4px bar and a note.
+The value and bar turn amber past four fifths (fraction > 0.8). The bar's width
+is clamped to at least 1% so it is never invisible.
 
-### Model picker
+`plan_windows` returns the windows shortest first, each as (length in seconds,
+percent used, reset time in ms since the epoch). A window without
+`used_percent` is skipped. Grok's named period maps to 86_400 seconds (daily),
+2_592_000 (monthly, 30 days) or 604_800 (weekly, the default).
 
-It lists whatever can actually answer: a signed-in subscription's models, plus
-the Gateway's when there is a key. The Gateway catalogue is not fetched without
-a key, since none of it could be spent. Subscription catalogues are read at
-startup and the whole list is saved with the rest of the state, so a relaunch
-opens the picker on what it had instead of on nothing while three requests
-land. Switching a model checkpoints the conversation and restores it into a
-new agent, because the model is a creation option. With no key and no
-subscription, the picker says *No model* instead of naming a Gateway default
-that could not run.
+A window is named by its length (`limit_name`).
 
-### What a new session starts on
+| Length | Name |
+| --- | --- |
+| 2_592_000s | "monthly limit" |
+| 604_800s | "weekly limit" |
+| 86_400s | "daily limit" |
+| other lengths over a day | "N-day limit" |
+| below a day | "N-hour limit" (18_000s is "5-hour limit") |
 
-If you have set *New sessions start on* in settings, every new session opens on
-that model, because an explicit choice outranks anything inherited. Left on
-*Automatic*, a session follows the last one in that workspace: model, provider,
-effort and fast tier together, since a model id without the provider that
-serves it routes nowhere. The first session in a workspace has nothing to
-follow, so it opens on a signed-in subscription's own model, the first its
-catalogue lists (which is also the first the picker shows). It falls back to
-`poolside/laguna-s-2.1-free` on the Gateway only when a key is in hand and no
-subscription is signed in. Neither provider publishes which model it considers
-the default, so the order they list them in is the only thing to go on.
-Whichever rule applies, a model nothing could answer with is skipped: a
-Gateway model with no key in hand gives way to a subscription. A new session
-with nothing to answer on shows *Nothing can answer yet* in the pane. Sending
-a prompt keeps the message on the transcript with a Settings action, instead of
-replacing the conversation with the settings page.
+A reset is said the way a person would say it (`resets_on`): a time
+("at 2:30 PM") when it is less than a day away, a weekday ("Monday") within a
+week, and a date ("on 23 November") after that. It reads "soon" if the
+timestamp is invalid. `offset` is the local zone's seconds east of UTC.
 
-### Reasoning effort
+### `@` files and `/` skills
 
-Every provider publishes the levels a model accepts and which one is the
-default: Grok's `reasoning_efforts` and Codex's `supported_reasoning_levels`,
-which differ per model. The composer's slider offers exactly those, and the shim
-sends the choice as `reasoning: { effort }`. Changing it restarts the
-conversation from its checkpoint, the same as changing the model. The chip in
-the composer footer opens the dial, a pill track with a dot per level and a
-round handle, which is the shape Claude Code uses. A pill and a circle also
-avoid GPUI's refusal to clip children to a parent's radius, which a fill
-running to the track's edge would run into.
+`Picker` is the `@` or `/` list above the composer. Each item is (label,
+detail, text to insert), and `query` is what was typed after the `/` or `@`.
+The `/` list shows up to 5 skills and the `@` list up to 8 files. Opening a
+picker closes any composer popover.
 
-### Fast tier
+`trigger` finds the `@query` or `/query` being typed at the end of the draft. A
+skill only counts as the first word of the draft. A file mention can be
+anywhere. The + in the composer starts an `@` mention, which opens the file
+list. Accepting a file replaces the trailing `@query` with the chosen path.
 
-Codex sells a faster service tier on some of its models and says how much
-faster in its own words: 2x on GPT-6-Astra, 1.5x on the GPT-5.6 line, and
-nothing at all on Daybreak Blue or Spark. The composer shows the toggle only
-where the model has one, labelled and explained with the provider's own text,
-and the choice is sent as `service_tier: "priority"`. Grok publishes no such
-tier, so nothing is offered there.
+The list opens 8px above the composer from its left edge, 520px wide for skills
+and 460px for files. A skill row is 44px: its name in a 112px column, then what
+it does. A file row is 36px: an icon (a folder when the inserted text ends in
+`/`), the name, then its folder right-aligned. The footer under the rows says
+what the keys do ("⏎ Use skill"; "⏎ Attach" and "Tab Complete path") and, for
+skills, how many the workspace has.
 
-### Context meter and plan usage
+A name marks the typed prefix when the label starts with the query, compared
+ASCII case-insensitively and only on a char boundary. The prefix is tinted
+`blue_900`. Its weight does not change.
 
-The ring at the end of the composer footer shows how full the model's context
-window is: the last request's input plus what it wrote, against the window the
-model's catalogue publishes. Click it for the split across messages, system
-prompt, tools, MCP tools, skills and free space. The total is the provider's
-own count, taken on every request. The split is an estimate at four characters
-a token, and whatever it leaves over counts as messages. It replaced a running
-count of every token billed, which grew with each tool call and said nothing
-about how close the conversation was to the limit.
+↑ steps the picker by `count - 1` (one back, wrapping) and ↓ by 1. Tab accepts
+the highlighted item. Esc closes the list. The composer catches those keys
+before the text field does, and only while a picker is open.
 
-On a subscription the popover also shows the plan's usage, read off the
-headers of every reply. Codex sends the plan and each usage window with when it
-resets. Grok sends the requests and tokens left.
+The file picker lists files git knows about plus untracked ones it does not
+ignore (`git ls-files --cached --others --exclude-standard`). Outside a
+repository the picker has nothing to offer.
 
-During automatic compaction, “Compacting…” appears above the composer. libfx
-reports each compaction through its `hooks` as a model call whose purpose is
-`compaction`, whichever provider answers. The indicator shows while that call
-runs, and clears when it ends or when the turn ends, fails, or is cancelled. It is never restored
-from saved state. The fx CLI makes its requests outside this bridge and does
-not currently expose a compaction signal, so CLI mode has no indicator.
+A folder's branch, skills and files are read off the main thread
+(`load_folder`), so a folder opens empty and fills in a moment later; reading
+them up front held the first frame back by about 77 ms per saved folder, most
+of it the skill files. The branch and the file list are read again whenever git
+status is (`refresh_status`), which is after every turn, so a file the agent
+just created can be mentioned and a branch it switched to shows.
 
-### Skills
+Skills are read from fx's own folder and the other agents' folders
+(`.fx/skills`, `.agents/skills`, `.claude/skills`), in the workspace and in
+your home. These are the places the previous app read them from. A skill is a
+folder holding `SKILL.md`. The nearest copy of a skill name wins, because the
+workspace roots are listed before the home ones. A skill's description is the
+frontmatter's `description:` folded onto one line, including YAML's `>` and `|`
+continuation lines.
 
-fx's own skills live in `.fx/skills` in the workspace and in `~/.fx-ui/skills`,
-and go into the prompt whole. Skills written for Claude Code and Codex are
-picked up too, from `.claude/skills/<name>/SKILL.md` and
-`.agents/skills/<name>/SKILL.md`, in the workspace and in your home folder.
-They show in the `/` menu, and the prompt carries a list of them: each name
-with its description, trimmed evenly so the whole list stays within 16,000
-characters however many there are. A skill's full text is sent only when you
-invoke it or the model reads it with the `skill` tool, because there can be
-hundreds of them and all that text would fill the context window. A name in the
-workspace beats the same name at home, and `.fx` beats both.
-
-### MCP servers, local and remote
-
-Settings adds one from a single line: an `https://…` URL for a remote server,
-or the command line that starts a local one. Edit on that row sets headers on a
-remote server, or `env`, `envFile` and `cwd` on a local one, as `NAME=value`
-lines. Duplicate copies the connection under a new name and id, so a second
-org can share the command and differ in env. Removing it there takes it out of
-the running sessions as well. Either way it lands in `~/.fx-ui/mcp.json`, which
-stays hand-editable and keeps whatever else you have in it. Each connection
-gets a stable `id` when you add or import it; older files without one keep
-using the display name as the id. Workspace paths in `workspaceConnections`
-pick which connections that folder uses. A missing entry means every
-connection. An empty list means none. Parent folders are not searched or
-merged. Nothing is read from the repo.
-
-Ignore here in Settings writes that list for the open workspace. Disable still
-pauses a connection everywhere. Tokens and OAuth stay in `~/.fx-ui`; a
-workspace file that only names connection ids is a later step, and automatic
-`.mcp.json` discovery is not in this version. The row shows whether a
-connection is connected, needs sign-in, or failed to start.
-
-A remote server's tools ask before they run. Approval scopes include the
-connection id and its resolved URL, or its resolved command, arguments and
-working directory. Changing those values, including through environment or
-file variables, requires renewed approval. Token-only changes to env or
-headers do not revoke the grant. A connection whose variables cannot be
-resolved loses its old grant without preventing other connections from loading.
-
-Import in the MCP settings row finds global configs from Cursor
-(`~/.cursor/mcp.json`), Devin (`~/.config/devin/mcp_config.json`, or the older
-`config.json` when the dedicated file is absent), and Windsurf/Cascade
-(`~/.codeium/windsurf/mcp_config.json`). Devin also respects `XDG_CONFIG_HOME`.
-The list shows each source and lets you select servers to copy. Selecting the
-same name or connection from another source replaces the earlier selection.
-Existing fx entries are skipped, including entries added after the preview
-opened. Source files stay unchanged, and fx writes its config atomically with
-owner-only permissions. Imported servers start with fresh fx approvals and
-OAuth state; editor login sessions are not copied.
-
-Configs may contain comments and trailing commas. Import translates `serverUrl`
-to `url` and preserves disabled servers, which can be enabled from Settings.
-Environment and file references stay as references and are resolved when a
-server connects. Existing fx configs keep other `${…}` expressions unchanged
-so shells and inline scripts can evaluate them. Local servers support `envFile`
-and `cwd`; explicit `env` values override the environment file. Relative `cwd`
-and `envFile` paths are
-based on the source config directory. Relative commands and script paths need
-an explicit `cwd`, including scripts after runtime flags or `bun run` and
-`deno run`, so the importer does not guess a workspace. Workspace
-variables, legacy SSE, custom OAuth settings, and per-tool restrictions show
-an explanation and cannot be imported yet. Import and Enable/Disable wait for
-running turns to finish before reloading MCP connections.
-
-A remote server that answers `401` is not a failed load. It becomes a row in
-settings with a Sign in button, and the rest of the session carries on without
-it. Signing in runs the MCP authorization flow: the `WWW-Authenticate`
-challenge names the protected-resource metadata, that names the authorization
-server, this app registers itself there dynamically, and a PKCE round trip
-through your browser returns a token bound to that one server by `resource`.
-Tokens live in `~/.fx-ui/mcp-auth.json` at mode 600 and refresh themselves.
-Nothing opens a browser mid-turn. A server that needs you appears as a notice,
-and you sign in when you choose to.
-
-MCP catalogs load up to 1,024 tools per server, with pagination and duplicate
-name checks. A small `libfx@0.0.14` patch adds an explicit catalog limit option;
-the SDK's default stays at 64. This matters for servers such as Linear, whose
-catalog is larger than the SDK default. The agent still has at most 64 host
-tool slots: it discovers MCP tools with `capability_search`, reads a schema
-with `mcp_select_tool`, then passes the exact name and arguments to
-`mcp_call_tool`. Server tools stay in the shared MCP pool instead of occupying
-individual agent slots. Calls retain a per-connection approval scope tied to
-that id and endpoint.
+Both lists are ranked by a subsequence match on the typed text (`rank`). Each
+matched letter scores 1, a letter that continues a contiguous run adds 3, and a
+match at a word start (after `/`, `_`, `-`, `.`, a space, or at position 0)
+adds 2. Shorter items break ties. `score` takes the best greedy match over
+every place the first query letter occurs, so "side" finds `sidebar` and not
+the `s` of `src/`.
 
 ### Images
 
-⌘V pastes an image from the clipboard, such as a screenshot or a copied image,
-which gpuix hands on when the clipboard holds no text. In the
-+ menu, *Paste image* reads the clipboard directly, which also takes an
-image file copied in Finder whatever text that copy carries. *Choose images…*
-picks them from disk, and `@screenshot.png` mentions one in the workspace.
-Clipboard text still pastes as text. Attached images sit as thumbnails above
-the prompt until it is sent, then under your message, where a click opens one
-in Preview. Each is copied into `~/.fx-ui/attachments`, so the conversation
-keeps it when the original moves.
+A prompt carries at most 8 images (`MAX_IMAGES`), each at most 3,932,160 bytes,
+which is 3.75 MiB (`MAX_IMAGE_BYTES`). `FxApp.attachments` is the images
+waiting to go with the prompt being written. Anything past the limits is left
+out and the session says so.
 
-libfx cannot carry an image in a prompt at all. Its SDK rejects image prompt
-blocks outright, and a tool result's images are dropped before they leave the
-core. So an image is handed over as a path with an instruction to look at it,
-and `vision` reads it on the session's own credential. `vision` reaches the
-attachments folder and nothing else outside the workspace.
+The images a clipboard item holds are copied pixels or image files copied in
+Finder. The explicit paste-images action takes them whatever text sits beside
+them. A plain ⌘V passes `with_text` false, so a clipboard that also holds text
+pastes as text and gives no images. The text field's `on_paste` handler returns
+true (handled) only when images were found and attached.
 
-### Background commands
+Waiting images show as 56px thumbnails above the text, each with a remove (×)
+button that shows only while its thumbnail is hovered. The × is an 18px
+`gray_1000` disc inside a 22px disc of the composer card's own colour
+(`gray_100`), which reads as a 2px ring separating it from the image.
 
-A command started with `shell` background true used to run unseen until the
-session closed. The composer now shows how many are live and stops any of them,
-and the row disappears when one exits on its own. Each runs in its own process
-group, so stopping one ends everything it started, and quitting fx stops them
-all.
+## Sidebar, tabs and home
 
-### Sessions keep going when you switch
+### The shell
 
-A turn belongs to its session, not the pane showing it, so switching sessions
-or panes leaves it running. The sidebar dot shows it working, and a shield or a
-speech bubble in its place means it is waiting on you, for an approval or an
-answer. A turn does not survive quitting the app: the conversation picks up
-from the last finished turn.
+The shell is the frame around every screen: the sidebar, the tab bar that
+stands in for it when it is closed, the session and folder menus, and the
+header of the inset panel. Sizes, gaps and colours are the Paper file's.
 
-### Steering and queued prompts
+With the sidebar open, its own top row holds the traffic lights, so the panels
+start 8px down beside it. With it closed, the sessions move into a tab bar
+beside the traffic lights and the panels take the full width.
 
-While a turn is running, Enter steers it: plain text goes into the running turn
-through libfx's `turn.steer()`, which the model reads at its next safe boundary
-without losing the response in flight or finished tool work. The message shows
-in the transcript as soon as libfx accepts it. Until then it waits above the
-composer marked *Steering*, and it cannot be taken back.
+The sidebar takes 160ms to slide open or shut. `sidebar_closing` is set while
+it slides shut, and `sidebar_slides` is counted up on every toggle so each
+slide is its own animation, since the animation id includes the count. It
+slides shut first and only then is `sidebar_open` cleared, at which point the
+tab bar takes over. The sidebar's box grows from nothing as it opens and
+shrinks to nothing as it shuts, clipping the sidebar inside. The first draw
+(`sidebar_slides == 0`) is still, with no animation.
 
-Images, skill commands and `@` mentions cannot steer, since they need the
-expansion a fresh turn gives them, so they go on a list above the composer
-instead, and so does anything the turn refuses. × takes one off. A turn that
-finishes successfully sends the next item; stopping the turn, a failed request,
-a refusal, or hitting the output or step limit leaves the list. Enter on an
-empty composer sends the next one once nothing is running. A named subagent
-that is working takes a note instead, as below.
+### Sidebar rows
 
-### Copying an answer
+A workspace shows 5 sessions (`RECENT`) before "Show N more" is pressed.
 
-The answer that ends a turn has a copy button under it.
+The right end of a session row is one 20px slot. It shows the status (an amber
+dot when waiting on approval, a spinner when running, a red dot when the last
+turn stopped) or the age, and is swapped for the menu button on hover, so the
+column stays put. `ago` writes the age as "now", "5m", "3h" or "2d" from fx's
+timestamp.
 
-### Undo the last write
+The round 24px avatar stands for you. It is the first letter of the user name,
+or "F" when there is none. Under your name is the account answering, which is
+the current choice of the session's `provider` option. When there is none it
+says what fx is doing instead: "Starting fx…", "fx is not running" or "fx".
 
-`⌘K` → *Undo the edit to …* puts a file back as it was, or deletes it if that
-write created it. It refuses when the file has changed since, so a newer change
-is never thrown away. The last twenty writes of a session are remembered.
+`open_section` opens Settings at a section. The sidebar's Skills row and the
+account row both land there.
 
-### Restore this turn
+### Menus
 
-In a git workspace whose directory is the repository root, a turn snapshots the
-worktree through a temporary index seeded with tracked files, so ignore rules
-cannot hide tracked content and the user's staging is preserved. It also records
-the real index. `⌘K` → *Restore this turn's files* puts both back if nothing has
-changed since the turn ended. Files the turn created
-are removed. A directory that is not a repository, or is only a subdirectory of
-one, stays on per-file undo. Git restores file/directory transitions through the
-temporary index before the original staging is restored. Ignored untracked files
-are not snapshotted; restore refuses if they overlap a path being restored.
-Restore does not uncommit and is remembered only for this session, like undo.
+`MenuAt` says which menu is open: a session's (on its sidebar row or in the
+header), the tab bar's folder switcher, or a server's row on the MCP settings
+page, by its place in the list. Every menu in the shell opens as the same 220px
+card (`menu_frame`), and a press outside closes it.
 
-### Project instructions
+A press outside a menu closes it on mouse down and remembers which menu it was
+in `menu_closed`. If that press was on the menu's own button, the click that
+follows on release would reopen it. `toggle_menu` takes `menu_closed` and does
+nothing when it matches, so a press that just closed the menu does not reopen
+it.
 
-`AGENTS.md` (or `CLAUDE.md`) at the workspace root is loaded into the system
-instructions, the way the fx CLI does it.
+The session menu is rename, show changes, open beside, copy the session id,
+remove. "Open beside" is offered for any session but the open one. "Copy
+session id" only shows once the session has an id.
 
-## Tools the agent gets
+### The tab bar
 
-The set fx documents at
-[capabilities/tools](https://fx.sh/docs/capabilities/tools), plus git.
+The band across the top when the sidebar is closed holds, beside the traffic
+lights, the button that brings the sidebar back and the folder name; then that
+folder's sessions as tabs; then search, settings and the avatar. It shows as
+many tabs as stay readable at about 150px each beside the bar's fixed parts
+(420px), between 2 and 8, and ⌘K has the rest. The open session always keeps
+its tab: if it would be cut it takes the last slot. Tabs share the bar like a
+browser's, up to 220px each and narrower as more open.
 
-| Area | Tools | Approval |
+On home nothing is open yet, so the new-session button is lit. A session
+waiting on approval in another folder shows as an amber dot on the folder's
+name.
+
+The folder switcher under the folder name lists each folder with what its
+sessions are doing (an amber dot, a spinner, or a check for the current one),
+then the way to add one. Picking a folder starts a new session in it.
+
+### The header
+
+The working tree's diff is a button in the header: `+184 −62`, or "No changes",
+opens the changes beside the session (`⌘\`). In split view the button is hidden
+because the changes panel itself shows the total.
+
+### Home
+
+Home is what the panel shows before a session has a first turn: the mark, the
+question and the composer over the workspace's sessions; the two setup steps on
+first run; and the way back when `fx acp` has exited.
+
+Every home screen opens with the braille fx mark (mono, 10/11) over a 28px line
+set in the display face. The home column is centred, starts 120px down and has
+28px between its parts.
+
+`HomeTab` is the list under home's composer: Recent, Running or Archived. The
+open filter is a filled pill, and Running counts the sessions that are working.
+Working sessions lead the list. The rest follow newest first, as the sidebar
+orders them. At most 6 rows show. A working row says what the turn is on and
+how long it has run ("now", "5m", "2h"). An idle row says what its last turn
+left changed (`+N −M`) and its age.
+
+A list row is the status mark, the title, then a note and the age in fixed
+lanes (the age lane is 28px) so they line up down the list. The status mark
+sits in a 16px slot so titles share one left edge. The dim 4px bullet is a
+session that is neither working nor waiting.
+
+`day` gives the heading home files a session under ("Today", "Yesterday",
+"Earlier"), by the local calendar day it was last touched. A session made this
+run has no timestamp and counts as today. Days turn over at local midnight, not
+UTC midnight, and a timestamp from a clock that ran ahead still files under
+today. The day names sit over the rows they cover. Headings after the first sit
+a little lower: 36px tall with 14px above, instead of 32px with 10px. Day
+headings space the rows on Recent. On the other tabs there are none, so the
+first row gets its own 6px gap.
+
+A session waiting on an answer is a card on home that takes the answer right
+there, and it leaves the list below. The detail is one line, and a path inside
+the folder reads from the folder's root, with the folder path prefix stripped.
+The card itself opens the session, so its Deny and Allow buttons stop
+propagation. The allow button reads "Run" for an `execute` call and only shows
+when the agent offered `allow_once`.
+
+When `fx acp` has exited, home shows what it said and the ways back: start it
+again, fix sign-in, or run fx doctor. Only the last 4 non-empty lines of the
+error are shown, because the last few lines are the useful ones.
+
+### The command palette and dialogs
+
+The ⌘K palette and the small confirm and rename dialogs all sit on the same
+dimmed scrim, black at 0x8c alpha. A click on the scrim closes whichever
+overlay is open. Opening the palette closes the composer's popover, menu and
+picker, so nothing of the composer's floats over the palette.
+
+What you can do to the open session leads the list, as the palette is drawn,
+then the commands, then sessions. With nothing typed the list keeps that
+natural order (commands, then recent sessions) and shows the first 12. With a
+query it shows the 12 best matches by label, and draws each label with the
+first place the query appears in semibold.
+
+At the right of a row a command shows its shortcut and a session shows where it
+lives: the workspace name and how long ago it was updated. A command wears its
+icon. A session wears the 6px dot its row has in the sidebar.
+
+The palette sits 120px down in a tall window and closer to the top in a short
+one (13.3% of the window height, clamped to 24 to 120), and is never taller
+than the room under it: the list scrolls instead. The scroll handle lets the
+keyboard selection be scrolled into view. The list's children also hold one
+heading per group, so the index of an entry is its position plus the number of
+headings above it (`row_of`). With children heading, a, a, heading, b, b the
+four entries sit at 1, 2, 4 and 5. Moving the selection to the first entry
+scrolls to child 0, so the first entry takes its heading into view with it.
+
+A dialog is centred in the window and 400 wide, as the dialog artboard draws
+it. Its foot is a darker bar with Cancel at one end and the action at the
+other. The rename dialog's input is drawn focused, as designed: a blue border
+with a soft halo, a 3px spread shadow of 0x0070f3 at 0x40 alpha.
+
+⏎ on an open confirm dialog (full access, remove, discard) confirms it, as its
+button says, and `confirm_dialog` reports true. A rename dialog is left open
+and reports false, because its own input handles ⏎.
+
+## Changes and the split view
+
+### The changes panel
+
+The changes panel sits beside the session, as the split designs draw it. Files
+lists what is staged and what is not. Diff opens one file at a time with the
+rest folded under it. `⌘\` opens and closes the panel, and it refreshes when a
+turn ends.
+
+The panel starts 576px wide. Its left edge drags it: the 8px gap between the
+session and the panel is itself the drag handle. `changes_width` is the current
+width and `resizing` is the drag in hand, as (pointer x when the button went
+down, width at that moment). The width is clamped to 360 to 960px. The panel
+follows the pointer until the button comes up, wherever in the window that is,
+which is why the move and mouse-up listeners sit on the root.
+
+The panel's state:
+
+| Field | Meaning |
+| --- | --- |
+| `Changes.open` | The file whose diff is showing. `None` shows the file list. |
+| `Changes.full` | The open diff shows every line, not only the first `DIFF_LINES` (120). |
+| `Changes.hovered` | The file row under the mouse, keyed as "staged:path". That row shows its actions. |
+| `Changes.last_commit` | Text such as "7053d71 · 2 days ago", shown when there is nothing to commit. |
+
+Every file row starts the same way: status dot, name, folder, and "new file"
+when git does not track the file yet (status `?`) or it is newly added (`A`).
+The +/− stat shows until the row is hovered. Then its actions take its place:
+Discard only on unstaged rows, and Stage or Unstage. The 26px buttons inside a
+row are filled to stage and outlined to unstage.
+
+The diff view shows the open file's card with its diff, and the other files
+folded below it as one-row cards that open on click. 120 diff lines
+(`DIFF_LINES`) show before "Show N more lines".
+
+With nothing to commit the panel shows a check, the branch the working tree
+matches ("HEAD" when there is none) and the last commit.
+
+A refresh keeps the open file open if it is still changed, matching path and
+staged side first and then path alone. After the panel updates it also
+refreshes the workspace's status, because the header's +/− and the turn's files
+card read the same list. `git_edit` runs one git edit off the main thread, then
+refreshes. An error from the edit shows in the panel.
+
+### What git is asked
+
+The git module holds the changes view's git and the line diff the approval card
+shows before fx writes a file. Every call shells out to `git` in the workspace,
+and the calls run on a background thread because none of them is fast enough
+for the render loop.
+
+- `status` gives staged and unstaged changes with line counts. A file changed
+  in both places appears twice, once per side, the way `git status` lists it.
+  It reads `git status --porcelain=v1 -uall` and takes counts from
+  `git diff --cached --numstat -z` and `git diff --numstat -z`. The `-z` form
+  is used because it names a renamed file plainly, so a staged rename gets its
+  counts under its new name. An untracked file counts every line as added. A `Change.code` is one of `M`, `A`, `D`, `R` or
+  `?` (untracked).
+- `file_diff` gives the diff of one side of one file, parsed for display. An
+  untracked file has no git diff, so it is shown as all additions. A `DiffLine`
+  is one rendered diff line as (kind, old line number, new line number, text).
+- `discard` throws away the working-tree change with `git restore -- <path>`.
+  An untracked file is deleted.
+- `last_commit` runs `git log -1 --format=%h · %cr`, which gives a line like
+  "7053d71 · 2 days ago" for the clean panel.
+- `line_diff` is a line diff of `old` to `new` that keeps `context` unchanged
+  lines either side of each change. `usize::MAX` keeps every line. Where a line
+  changed, removals come first, as unified diffs print them.
+
+### A session beside another
+
+`FxApp.beside` is a second session shown beside the open one. It is held by id,
+because indexes move when the list is sorted. Opening a session beside loads it
+if need be. A session cannot sit beside itself, so opening the one that is
+beside clears the beside slot.
+
+The session beside draws its name over its thread, dimmed to 0.6 opacity
+because the keyboard is with the other. A press anywhere in its thread makes it
+the open one, and the two trade places (`swap_beside`): it becomes the open
+one, and the one that was open takes its place, unless it is empty.
+
+## Restoring a turn's files
+
+`Session.snap` is the folder as a git tree when the last prompt began, and
+again once it ended. It is what "Restore this turn's files" puts back, and its
+proof that nothing has changed since.
+
+A snapshot is taken off the main thread. It is the folder as it stands, written
+as a git tree: tracked and untracked files alike, ignored ones left out
+(`git add -A` then `git write-tree`). It returns nothing when the workspace is
+not the root of a repository, because a subfolder's snapshot would miss its
+siblings. Where there is nothing to restore from, the session's snapshot is
+cleared.
+
+Snapshots and restores run git against a throwaway index file. `GIT_INDEX_FILE`
+is set to `fx-desktop-index-<pid>-<nanos>` in the temp folder, so nothing they
+do touches what you have staged.
+
+`restore_turn` puts the open session's files back as they were before its last
+prompt. git does it: `restore` puts back every file that differs between the
+two snapshots as `before` had it, and removes files that only `after` has. The
+checkout runs first and the removals after it, so a checkout that fails leaves
+the folder exactly as it was; a file that cannot be removed does not stop the
+others, and the first such failure is what gets reported. It refuses with "Files have changed since this turn ended, so nothing was
+restored." when the folder has moved on from `after`, so newer work is never
+thrown away. It returns how many files went back. Once restored the snapshot is
+cleared: nothing is left to undo.
+
+The palette offers "Restore this turn's files" once the last prompt has ended
+and left files changed. That is when the session's snapshot has an "after" that
+differs from its "before" and no turn is running.
+
+## Settings
+
+Settings is drawn as the Settings artboards draw it: a section list on the
+left, a page title, and grouped rows with the control on the right.
+
+### What Settings holds
+
+`refresh_settings` asks fx for each of these separately and in the background
+(`fetch`), and each lands on the page when it arrives. `fx doctor` takes about
+0.6 s and `fx usage` about 0.25 s; fetched together in one go, everything
+waited for the slowest.
+
+| State | Holds |
+| --- | --- |
+| `status` | The parsed output of `fx status --json`. |
+| `fx` | `~/.fx/settings.json`, which names the provider in use and its models. |
+| `permissions` | The always-allowed rules from `fx permissions`, parsed when they are fetched. |
+| `usage` | `fx usage --json` for the period in `period`. |
+| `period` | `today`, `7d` or `month`. `None` means `7d`. |
+| `plan` | The same usage report for one account, keyed by the account's id. It is what the context meter shows of the plan the open session runs on. |
+| `credits` | The AI Gateway balance from `fx credits`, when the gateway is the provider. |
+| `doctor` | `fx doctor` as one (level, check, detail) tuple per printed line. `None` means the check is still running. |
+| `open` | The select whose menu is open, by its option id (`model`, `mode`). |
+| `skills_filter` | The Skills page's filter field. It is created the first time the Skills section is shown (`set_section`), not when the app starts. |
+| `skipped` | The skills fx skipped and how many more it did not list. |
+| `signed_in` | The accounts that hold a credential, as the fx provider ids `codex`, `grok`, `gateway`. |
+| `servers` | The MCP page's own state. |
+| `account_note` | The account currently being signed in or out, and what its row says meanwhile. |
+| `instructions` | The textarea for the instructions every new session starts with. It is created the first time the Behaviour section is shown. |
+| `extra` | The open folder's extra folders, from `fx workspace list --json`. |
+
+`fx_in` runs `fx` with a folder as its working directory, because that folder's
+own MCP servers, extra folders and settings apply there. Without a folder, fx
+runs in `$HOME`.
+
+### Accounts and sign-in
+
+fx owns credentials. Its sign-in commands need a terminal (`fx setup` refuses
+to run without one), so the account buttons run or open the right `fx` command
+instead of handling keys or tokens in this app.
+
+Each entry of `ACCOUNTS` is (fx provider id, display name, the name `fx login`
+takes, logo path). The gateway's provider id is `gateway` but its `fx login`
+name is `vercel`. The logos come from svgl. `account_logo` gives an account's
+logo for the composer's model pill and model menu.
+
+`account_run` signs an account in or out with `fx <cmd>`. Codex and Grok sign
+in through the browser, so fx runs in the background and the row says to finish
+there. A gateway key is typed, and fx only takes one at a terminal, so that
+command goes to Terminal and the key never passes through this app. Terminal is
+also the fallback if fx refuses to run without one, which shows as the
+background run failing. Afterwards settings and the model catalogue are both
+reloaded, because the model menu lists accounts by who is signed in.
+
+`in_terminal` opens Terminal running `fx <args>` through `osascript`, for the
+fx commands that need a TTY (`login vercel --api-key`, `upgrade`).
+
+`fx status` only speaks for the default account, so `signed_in` reads the other
+accounts from where fx keeps them. A ChatGPT (Codex) sign-in is the file
+`~/.fx/chatgpt-auth.json`, a Grok sign-in is `~/.fx/grok-auth.json`, and a
+stored gateway key is noted in `~/.fx/settings.json` as
+`credential_source: "stored_key"`. An `AI_GATEWAY_API_KEY` in the environment
+also counts. The auth files are only checked for existence and a length over 2
+bytes. Their contents are never read.
+
+After `fx provider <id>` changes the default account, the open session's
+`provider` option is set too, so the open session follows the new default.
+
+### The Models page
+
+"Connected" means something can answer a prompt: either the default account's
+`auth` from `fx status` is non-empty and does not contain "not ", or any
+account is signed in.
+
+Every signed-in account can answer, and the model you pick decides which one
+does. One of the accounts is the default, which is where new sessions start.
+While fx signs an account in or out, its row shows the progress note instead of
+its detail. On the default account's row, fx's `auth` string (for example
+"stored API key (macOS Keychain)") has its first letter capitalised so it reads
+as a sentence before " · new sessions start here".
+
+The default model can come from any signed-in account, so its choices are every
+signed-in account's models, each tagged with its account as
+`account<tab>model`, with a tab character between them.
+
+### Selects and defaults
+
+The defaults' choices (model, mode, effort, fast) come from any session's copy
+of fx's config options: the open session's if it has any, else the first
+session in any workspace that does (`any_options`). With no session at all the
+rows say "Open a folder first".
+
+`select_row` is a row whose control is a select, and its menu drops below it.
+`select_button` only looks like a select: it shows the current value and a
+chevron, and the caller opens the menu. An option whose current value contains
+a tab is a model tagged with its account and carries its own current value.
+Otherwise the saved default is used. Choosing a tagged value saves both the
+`provider` default, the account that serves the model, and the model. Rows that
+are not the chosen one show which account the model belongs to.
+
+`default_value` is the value new sessions get: the saved default, or else what
+fx uses now, which is the option's current value.
+
+### The Behaviour page
+
+The instructions text is saved to the store's `instructions` default on every
+change as you type, and a new session reads it when it starts. An empty field
+removes the default.
+
+Thinking is a segmented control across fx's effort levels. The segments run
+from least thinking to most and are named as the composer names them, through
+the same `thinking` function.
+
+The always-allowed rules are read from the output of `fx permissions`. The page
+drops the `[permissions]` prefix, `mode=` lines, lines ending in `(none)` and
+header lines ending in `:`.
+
+The Extra folders group lists the folders fx may read and edit as well as the
+open one, as fx has them saved. Adding or removing runs
+`fx workspace add <path>` or `fx workspace remove <path>` in the open folder
+and then lists again. Adding goes through a folder picker that allows several
+folders.
+
+### The Usage page
+
+"Where the tokens went" is one stacked bar and a legend. "By model" gives the
+biggest spender the widest bar, and the others are scaled to it. `compact`
+writes 18200000 as "18.2M" and 940 as "940". `grouped` writes 1204 as "1,204".
+
+### The About page
+
+The "This app" row is the desktop app's own updates, separate from fx's:
+"Update fx" runs `fx upgrade` in Terminal. The row shows where the update check
+stands and the button that moves it on.
+
+### Rows and hairlines
+
+Rows sit in a card with hairlines between them (`rows_card`). The hairlines
+start `inset` from the left: 56 under the account tiles so they line up with
+the text, 16 elsewhere (`card_rows`), 35 for skipped skills, 52 for
+always-allowed rules. For insets of 16 or less the hairline also stops the same
+distance from the right. For larger insets it runs to the right edge.
+
+## MCP servers
+
+The MCP servers page is drawn as its artboard draws it: your servers with what
+each is doing, the open folder's own servers waiting on your say-so, and a form
+to add one. Every change goes through `fx mcp`, which owns the config files and
+the logins. The app never writes those files itself.
+
+`fx mcp` runs in the open folder, because that is the folder whose `.mcp.json`
+fx reads. With no folder open it runs in `$HOME`, and failing that in `/`.
+
+### What the page holds
+
+| State | Holds |
+| --- | --- |
+| `Servers.list` | The result of `fx mcp list --json`, with each server's address read from the config file fx names for it. |
+| `Servers.shown` | The answer of `fx mcp show NAME --json` for each server that has been asked, keyed by server name: its status and its tools, and an `error` string when it failed. |
+| `Servers.adding` | The add form's two inputs, name then address, present only while the form is open. |
+| `Servers.note` | The line under the page title. `(false, words)` is what an `fx mcp` command is doing right now, shown with a spinner. `(true, words)` is why the last one failed, shown with a red dot. |
+| `Server.project` | True when the server comes from the open folder's `.mcp.json`, not from your own list (`source == "project"` in the listing). |
+| `Server.remote` | True when the server is reached over HTTP (`transport == "http"`). Otherwise it is a command fx starts. |
+| `Server.status` | fx's word for the server before anything connects: `not_started`, `waiting_for_approval` or `rejected`. After a check, the status in `Servers.shown` wins over it. |
+| `Server.address` | The URL without its scheme, or the command line, with command and args joined by spaces. |
+
+### Where a server stands
+
+`state` gives the dot colour and the words.
+
+| Status | Words | Dot |
 | --- | --- | --- |
-| Find and read | `glob_files`, `grep_files`, `read_file`, `list_files` | none, inside the workspace |
-| Write and edit | `write_file`, `edit_file` | asks, and shows the unified diff |
-| Commands | `shell` with `run`, `interact` and `stop` | asks every time, and grants are per program |
-| Web | `web_search`, `web_fetch` | asks; `web_fetch` grants per host |
-| Images | `vision` | none |
-| Skills | `skill`, `install_skill` | `install_skill` asks |
-| Subagents | `subagent` | inherits the parent's approvals |
-| MCP | `capability_search`, `mcp_features`, `mcp_select_tool`, `mcp_call_tool` | calls ask, and grants are per server |
-| Interaction | `ask_user_question`, `read_tool_result` | none |
-| Git | `git_status`, `git_diff`, `git_log` | none, they only read |
+| ready | "N tools" | green |
+| `needs_login` | "Signed out" | amber |
+| `waiting_for_approval` | "Waiting" | amber |
+| `rejected` | "Rejected" | grey |
+| `not_started` or empty | "Not checked" | grey |
+| any other status | "Failed" | red |
 
-`subagent` and `vision` run on whatever credential the session runs on. A child
-may take its own `model` and `effort`; omit them and it inherits the parent's.
-The child cannot use a login the parent does not have. Nested children are
-still disallowed. A one-off child (`task`, or `action` `run`) is discarded after
-it answers. A named child (`action` `message` plus a name) keeps its conversation
-for the session, four at most: a fifth name closes the one used least recently.
-Closing the session drops them. A name that no longer has a live child starts a
-new one, and the tool result tells the parent it remembers nothing. The parent still waits for the
-child's current answer. Return while that child is working notes it instead of
-queueing a follow-up, and does not cancel the tool it is on.
+On a row's detail line, a failure says why in the place where the address would
+be, and a server waiting for approval says "Waiting for you to approve it"
+there. Only a real address is set in the mono font.
 
-Every model whose catalogue reports an `image` input modality can read one, which is
-both providers' whole line except Codex Spark. So `vision` sends the image as an
-`input_image` part on the subscription, and falls back to the Gateway only when
-the session has no provider or its model takes text alone.
+### Listing and checking
 
-Search works the same way, and its catalogue flag decides. Grok and Codex both
-run web search on their own side, so a session on one of those models searches
-through the provider: the host `web_search` is withdrawn, the Gateway key stops
-mattering, and every query and opened page becomes its own row in the
-transcript. Grok also gets its X search tool, so it can search posts and users
-on X, and each of those searches shows as an `x_search` row with its query.
-Those rows report a search after the fact. A search that runs inside the
-response cannot be approved before it happens, which makes it the one tool this
-app shows but could not stop. A Gateway session keeps the host tool, Exa, and
-the approval.
+`refresh_mcp` lists the servers and asks each remote one that is `not_started`
+how it is. Asking connects. A remote server answers at once, but a local one
+would be started only to be asked, so local servers wait for "Check now". A
+refresh keeps what "Check now" learned about servers that are still listed and
+forgets it for servers that are gone.
 
-A result larger than 24k is kept whole and returned as a preview plus a handle,
-and `read_tool_result` reads a byte range or searches it. Nothing is cut off.
+"Check now" (`mcp_check`) connects to one server and keeps what it says. If fx
+gives no answer, whatever was known about that server is dropped.
 
-## Motion
+`mcp_run` runs one `fx mcp` command off the main thread, says what it is doing
+meanwhile, says why it failed if it did, then lists the servers again. Every
+row button and menu item that changes a server goes through it.
 
-There are three animations. This is a keyboard-driven tool, and motion on
-anything reached hundreds of times a day reads as lag, so the command palette,
-the `@` picker and every transcript row stay instant on purpose.
+### Adding a server
 
-- The sidebar's width as it collapses and expands, and the folded sidebar
-  peeking out over the panes. Both use the same 160 to 200ms ease-out, because
-  they are the same surface arriving the same way.
-- The effort dial's handle and trail, 150ms, easing to the level you picked
-  instead of jumping to it. It drops to zero while dragging, since a drag has to
-  track the pointer exactly.
-- The braille mark on the empty screens, fading in over 300ms. It is the one
-  place with a delight budget, and it is spent once.
+While the add form is open it leads the "Yours" list as its first row. An
+address that starts with `http://` or `https://` is a remote server. Anything
+else is the command line of a local one, passed after `--`. A remote server is
+added with `--no-login`: sign-in is its own step, on the row, so adding never
+blocks on a browser.
 
-## Design
+`name_for` makes a name for a server from its address when you give none:
+"linear" for `https://mcp.linear.app/mcp`, "postgres" for
+`npx -y @modelcontextprotocol/server-postgres`. For a URL it drops the host
+labels `mcp`, `api` and `www` and takes the label before the last ("linear" of
+linear.app). For a command it takes the package or program, meaning the last
+word that is no flag and no path (it does not start with `-`, `/` or `.`),
+keeps what follows the last `/`, drops an `@version` suffix, and strips one
+leading `mcp-server-`, `server-` or `mcp-`. With nothing usable the name is
+"server".
 
-The palette and the type are fx.sh's own: `--background: #000`,
-`--foreground: #ededed`, `--border: #262626` and `--primary: #ededed` on black,
-with one monospace family for the whole interface. That system has no accent
-hue, so this app has none either. The only white edge on screen is the approval
-card that is blocking the turn.
+## Skills
 
-`<markdown>`, `<code>` and `<diff>` are GPUI native elements. The syntax
-highlighting and the diff are computed in Rust, and the theme is passed to them
-as props.
+The Skills page groups skills by where they live. Skills whose path is under
+the workspace are "This project", and the rest are "Yours". The folder shown
+beside each title is the first skill's grandparent folder: relative inside the
+project (`.fx/skills`), and with `~` for home outside it (`~/.agents/skills`).
+Each group shows 4 skills until "Show more" is clicked or a filter is typed.
 
-## State
+Problems come first, above the skill lists: the skills fx found but would not
+load. The skills fx skipped arrive as a notice at the start of a turn, and they
+are kept for Settings. fx reports skipped skills afresh with each turn, so
+starting a turn clears the list: none reported means none skipped. The settings'
+`skipped` is `None` until a turn has run, and until then the page falls back to
+what `fx doctor` reported. Each row shows the skill's folder as well as its
+name, because two folders can hold a skill of the same name.
 
-State lives in `~/.fx-ui`: `state.json` (mode 600, since it can hold an API
-key), `providers.json` and `mcp-auth.json` (also mode 600, for the OAuth tokens
-of the two subscriptions and each remote MCP server), `mcp.json` for the
-servers themselves, and one checkpoint per session. `FX_UI_HOME` moves that
-directory, which is what the tests and the screenshot script use so they never
-touch your real workspaces. While it is set, the `.claude` and `.agents` skill
-folders are looked for inside it instead of in your home folder.
+`explain` turns fx's reason for skipping a skill into a sentence or two saying
+what went wrong and what to do. fx's two usual reasons are rewritten in plain
+words: a broken link, matched by "linked skill directory" or "link does not
+lead", and a multi-line description, matched by `unsupported_multiline`. Any
+other reason is passed on as fx wrote it, capitalised and ended with a full
+stop by `sentence` ("its link is broken" becomes "Its link is broken."), with
+", then reload skills" cut from the fix.
 
-## Where the code lives
+## Updates
+
+The app updates the way fx-ui has always done it. It asks GitHub for the latest
+release (`https://api.github.com/repos/zaidmukaddam/fx-ui/releases/latest`),
+and if it is newer, downloads its disk image, checks it carries fx-ui's
+Developer ID, copies the app inside over this one, and offers to restart. Only
+the packaged app updates. Nothing happens unless the app is running from an
+`.app` bundle, since a development build has nothing to install into.
+
+The network and disk work is `curl`, `codesign`, `hdiutil` and `ditto`, all of
+which macOS ships, so the app takes on no HTTP client for updating. The release
+check allows 20 seconds (`--max-time 20`) and the download 600.
+
+`release` reads a release's version (`tag_name` without the `v`) and the
+download URL of its first `.dmg` asset from GitHub's JSON. A release with no
+disk image is nothing to install. `compare_versions` is negative, zero or
+positive as `a` is older than, the same as, or newer than `b`. A leading `v`
+and missing parts are forgiven: 1.2 equals 1.2.0.
+
+`install` downloads the release's disk image and refuses it unless fx-ui's
+Developer ID signed it. The check runs on the `.dmg` itself:
 
 ```
-app.tsx              the shell: panes, split view, window shortcuts
-src/store.ts         state, persistence, and the actions that mutate it
-
-src/agent/           what answers a turn
-  agent.ts           one libfx Agent per session, streaming into the store
-  backing.ts         what backs a session: its key, runtime, route and search
-  credentials.ts     keys, sign-ins, and the model list
-  oauth.ts           PKCE sign-in to Grok and Codex, and the tokens it stores
-  providers.ts       the request shim that routes a turn to a subscription
-  cli.ts             the fx binary as the core, for the sign-in it owns
-
-src/tools/           what the agent can do
-  index.ts           the set handed to the core, and this folder's surface
-  kit.ts             defineTool: the transcript row, the retained-result store
-  approvals.ts       the approval and question brokers
-  edits.ts           what each write replaced, so it can be put back
-  paths.ts           path confinement, the file index, globs
-  files.ts           list, read, grep, glob, write, edit
-  shell.ts           commands, foreground and background
-  web.ts             search, fetch, vision
-  vcs.ts             git status, diff, log
-  agents.ts          subagent, read_tool_result, ask_user_question
-  extend.ts          skills and MCP
-
-src/workspace/       the machine a workspace sits on
-  files.ts           @-mentions and file ranking
-  git.ts             git for the pane header and the tools
-  images.ts          pasting and choosing images, and keeping them
-  run.ts             spawning a process and capturing it
-  skills.ts          skills from .fx, .claude and .agents
-  mcp/               connected MCP servers
-    index.ts         config to connected tools, and the pool that shares them
-    config.ts        ~/.fx-ui/mcp.json: connections, ids, workspace bindings
-    stdio.ts         a server this app spawns
-    http.ts          a server it reaches over Streamable HTTP
-    auth.ts          the MCP authorization flow, and the tokens it stores
-
-src/ui/              primitives
-  theme.ts           design tokens, taken from fx.sh's stylesheet
-  ui.tsx             buttons, labels, tooltips, the effort dial
-  icons.tsx          the icon set
-  hooks.ts           useMountEffect
-
-src/views/           screens
-  sidebar.tsx        workspaces and sessions
-  palette.tsx        command palette and dialogs
-  settings.tsx       the settings page
-  models.tsx         choosing a model, in the composer and in settings
-  transcript/        the conversation
-    index.tsx        the list, its scroll fades, and which row renders what
-    shared.tsx       the column, the gutter, and holding the tail while a row grows
-    messages.tsx     what the user and the model said
-    tool.tsx         one tool call, its timing, and its output
-    blocking.tsx     the two rows that stop the turn: approval and question
-  composer/          the prompt line
-    index.tsx        the draft, the @ and / triggers, send and stop
-    pickers.tsx      model, reasoning effort, fast tier, permission mode
-    context.tsx      the context meter and what fills the window
-    tokens.tsx       the @ and / suggestion list
-    shared.ts        substring ranking, and how many suggestions to show
+codesign --verify -R=anchor apple generic and certificate leaf[subject.CN] = "Developer ID Application: Zaid Altaf Mukaddam (8BN7M8YM4J)"
 ```
 
-The code carries no comments. Read [PLATFORM.md](../PLATFORM.md) before
-changing rendering, the request shim, or either sign-in.
+It then mounts the image with `hdiutil attach -nobrowse -mountpoint` and copies
+`fx.app` over the running app with `ditto`.
+
+`FxApp.update` is where this app's own update stands, and the About page shows
+it.
+
+| State | Meaning |
+| --- | --- |
+| `Idle` | Not looked yet, or not running from an app bundle. |
+| `Current` | This is the latest release. |
+| `Ready` | The new version is installed over this app and restarting runs it. |
+
+No release to move to and GitHub being unreachable both end with nothing to
+install. The second is shown as a failure. `restart_updated` starts the updated
+app with `open -n` and leaves this one.
+
+## What is stored on disk
+
+The store is what the app remembers between launches: the workspaces you
+opened, names you gave sessions, sessions you removed from the list, and the
+defaults new sessions start with. fx keeps the sessions themselves. The store
+lives at `~/Library/Application Support/fx-desktop/state.json`.
+
+The first time it runs, with no store yet, the app takes the folders the app
+before 0.3.0 had open from `~/.fx-ui/state.json` (each workspace's `path`,
+kept only if the folder still exists), so an update keeps your sidebar. Nothing
+else carries over: that app ran its own agent and its sessions are not fx's.
+
+| Field | Holds |
+| --- | --- |
+| `titles` | Session id to the name you gave it. |
+| `hidden` | Sessions removed from the sidebar. fx still has them on disk. |
+| `defaults` | Option id (`model`, `mode`, `effort`, `fast`) to the value new sessions are switched to. The `provider` and `instructions` defaults are kept here too. |
+| `changes` | Session id to the lines its edits added and removed, as they stood against HEAD when its last turn ended. Home shows it on the session's row. |
+| `ran_on` | Session id to the account and model its last turn ran on. |
+| `mute` | When true, no notifications when a turn needs you or finishes while fx is in the background. |
+
+The file is written through a temporary file (`state.json.tmp`, then renamed
+over `state.json`) so a crash mid-write never leaves half a file behind.
+
+## The design system
+
+### Tokens
+
+The colours are Vercel's Geist dark theme, the same tokens as the Paper design
+file. The values come from Vercel's stylesheet (`.dark-theme`,
+`--ds-*-value`). The app uses nothing outside the tokens module for colour, so
+a design change is a change in one file.
+
+The app is dark only, like the design. `apply` sets the gpui-kit `Theme` to the
+same greys so components that draw from the theme (inputs, menus, scrollbars)
+match the app's own views. The theme sizes are font 14px, mono 13px, radius 8px
+and large radius 12px. Selection is `#0070f3` at alpha 0x55.
+
+`COLUMN` (720px) is the content column as in the design. `SIDEBAR` is 248px.
+
+Four tokens double as code colours: `blue_900` is for links, and for constants
+and types in code; `pink_900` is keywords; `purple_900` is functions;
+`amber_900` is parameters.
+
+The inset panels are near-black on the black window, with a hairline ring and
+the faintest shadow.
+
+### Fonts
+
+`FACES` holds two font names chosen once in `load_fonts`: the UI face and the
+face for text of 20px and up. `sans()` is SF Pro Text, the design's face, with
+all its weights. `display()` is SF Pro Display, the optical size Apple draws
+from 20px up, used for the home heading and page titles. If SF Pro Display is
+missing, display falls back to whatever the text face is. Before `load_fonts`
+has run both return `.SystemUIFont`.
+
+Geist Mono (`assets/fonts/GeistMono-Regular.ttf`) is bundled into the binary so
+code renders in the right face on any machine. The UI face is not bundled: it
+is whichever SF Pro the Mac has installed. A failure to load Geist Mono is
+printed to stderr and the app carries on.
+
+The root sets Geist Mono as a font fallback, so every Return hint is the
+design's ⏎ glyph instead of the system's ↵.
+
+### Components
+
+These are the pieces every screen is built from, each with the size, radius and
+type the Paper file gives it: icons, text, buttons, dots, cards and the
+switches.
+
+- `text(size, line)` sets size and line height together, because every text
+  layer in the design carries them as a pair.
+- The working spinner is a gray track (`spin-track`, `gray_400`) with a quarter
+  arc (`spin-arc`) turning on it, one turn every 900ms. `spinner_in` draws the
+  arc in a given colour, and amber is used while fx retries.
+- The status dot is 7px.
+- `text_button` is a quiet text action, like "Always allow cargo check".
+  `danger_button` is the red confirm in a dialog and shows ⏎ because Return
+  presses it. `icon_button` is the 28px icon button for headers (the panel
+  toggle, the close).
+- `card` is the card approvals, questions and errors sit in. `error_card` is a
+  turn or session that failed: the red mark and what happened, under the fixed
+  title "The turn stopped".
+- `stat` draws `+12 −3`, green and red, in mono. The added count is shown when
+  it is above zero or when nothing was removed, so an empty change reads `+0`.
+  The removed count only shows when above zero.
+- The settings switch is 34 by 20 and blue when on. The small switch in the
+  model menu is 30 by 18 and white when on, and its knob turns dark.
+
+`shadow_panel` sits under the inset panels, `shadow_composer` under the
+composer, `shadow_pop` under menus and popovers, and `shadow_modal` under the
+palette and dialogs. Pop and modal are three soft layers, as the design's
+Overlays page stacks them: a hairline (y 1, blur 1, alpha 0x05), a near one
+(alpha 0x0a) and a far one (alpha 0x0f).
+
+### Icons
+
+The icons are exactly as the Paper file draws them: a 16px grid, mostly a 1.4
+stroke. `icon(name, size, color)` asks the asset source for `fx/<name>.svg` and
+tints it with the text colour, so a view names an icon, a size and a colour and
+nothing else.
+
+Each entry of the `ICONS` table is (name, stroke width, markup). Line caps and
+joins sit on each element and not on the `<svg>`, because the design mixes
+them: the panel's divider is butt-capped, the plus is round.
+
+`icons/fx-mark.svg` (`FX_MARK`) is the fx wordmark from fx.sh, drawn as a
+tintable monochrome icon. The fx mark and the account logos
+(`logos/codex.svg`, `logos/grok.svg`, `logos/vercel.svg`, taken from svgl) are
+files in `assets/icons/`. Everything under `fx/` is generated from the `ICONS`
+table. Any other path falls through to gpui-kit's own assets.
+
+### Markdown
+
+fx's answers are drawn as the "full agent run" artboard draws them: 14/24 body,
+semibold headings, dot bullets, a code block with its own header and Copy, a
+table with a tinted header, a bar beside quotes, blue links. The app lays the
+blocks out itself from the parsed markdown tree, the `markdown` crate's mdast
+with GFM options.
+
+- Inline content is one wrapping run of text. Links are click ranges on it and
+  open in the browser. A soft break inside a paragraph is a space, so `\n` in a
+  text node is replaced with " ". A hard break pushes a real newline. Images
+  are drawn as their alt text, inline HTML as its source.
+- A fenced block is its language (or "text") and a Copy button over the code on
+  black. The block's highlight ranges are for the whole block, so each line
+  takes the ranges that overlap it, moved to its own offsets, and drops any
+  that would not fall on a char boundary.
+- Table rows sit under a tinted header and are ruled between rows only, not
+  between columns.
+- If the markdown ever fails to parse, `render` falls back to the source as
+  plain text.
+
+Code is coloured with Geist's code colours, as Vercel maps them
+(`CodeColors`): pink keywords (and tags), green strings, purple functions (and
+constructors, attributes), blue constants and types (and numbers, booleans,
+enums), amber parameters, gray comments. Punctuation and operators are
+`gray_900`. Syntax colours are cached per (language, code) hash in a
+thread-local map, so a transcript's code is not highlighted again on every
+frame. The cache is emptied when it grows past 128 entries, about a screenful
+of blocks. A block with no fence language is not highlighted at all. A language
+without a grammar comes back with nothing coloured.
+
+Narration, a line fx said between steps, shows in the work log with the same
+marks at the log's smaller size (`Renderer.compact`): 13/20 with 6px between
+blocks instead of 14/24 with 14px.
+
+The renderer carries the turn so element ids stay unique across the transcript.
+An id is `turn * 10_000 + next`, and `next` starts at `salt * 100` (0 for an
+answer, step + 1 for a narration line) so several markdown bodies in one turn
+do not collide.
+
+### Diffs
+
+Diff lines are drawn as the design draws them (`diff_block`): one 40px
+line-number column, showing the new number or the old one for a removal; tinted
+22px rows for changes, green `#45a557` at alpha 0x1f for added and red
+`#e5484d` at alpha 0x1a for removed; hunk headings in gray on 26px rows; all on
+the black code ground. It draws at most `limit` lines, and callers add
+`more_lines` themselves when they cut the diff short. `more_lines` is the "Show
+84 more lines" row, and it says "line" for exactly one.
+
+The design layer must not know about git, so the two functions that take a
+`DiffLine`, `diff_block` and `more_lines`, live with the views and not with the
+components.
+
+## The disk image and packaging
+
+The install window reads as one shell line, `››› mv [fx] [Applications] █`:
+three chevrons as the prompt, the two icons as the command's arguments. Icon
+centres are (298, 124) and (450, 124) in a 640x360 window, and
+`dmg-settings.py` and `dmg-background.swift` must agree on them.
+
+Finder's own black icon names disappear on the black background, so the window
+draws its own names (`fx.app`, `/Applications`) into the background, about 20pt
+below where Finder puts its own, so Finder's invisible text does not cut into
+them. Finder's name for a 96pt icon centred at y sits at about y+56 to y+72.
+
+The background is a two-frame APNG, cursor on and cursor off, 0.53 seconds
+each, looping for ever. That is the blinking cursor at the end of the line.
+
+`package.sh` signs ad hoc unless `SIGN_IDENTITY` names a Developer ID
+Application identity. With one, it notarizes when `NOTARY_PROFILE` (a
+notarytool keychain profile) or `NOTARY_KEY`, `NOTARY_KEY_ID` and
+`NOTARY_ISSUER` (an App Store Connect key file) are set. The app's own updater
+only installs images signed by fx-ui's Developer ID.
+
+## Known ceilings
+
+Each of these is a deliberate simplification with a stated limit and a way up.
+
+- **A transcript's elements are rebuilt on every draw.** The parsed markdown,
+  the code colours and the edit counts are cached, and turns more than a screen
+  away are drawn as spacers of their measured height, so the cost follows what
+  is near the window and not the length of the session. The split view's second
+  transcript has no such skip. If that bites, give it the same treatment.
+- **A turn's line count is by file.** `delta` compares how far each edited file
+  moved against HEAD, so a turn that deletes lines an earlier turn added and
+  never committed shows nothing for them. If rows need exact counts, diff the
+  two file contents instead.
+- **The thread's bottom padding is sized for the two-line composer.** A taller
+  draft covers the last lines of the thread until it is sent. Measure the
+  composer if that bites.
+- **A local MCP server's command line is split on spaces.** A quoted argument
+  with a space in it breaks apart. Parse shell quoting if that comes up.
+- **`line_diff` is an LCS over lines with an O(n·m) table.** It is quadratic in
+  file length, which is fine for the files an agent writes in one go. If
+  approvals on huge files get slow, swap in Myers.
+
+## What the tests hold
+
+- `folds_a_recorded_turn` folds tool-call, tool-update and message-chunk lines
+  recorded from fx 0.0.16. `reads_retries_titles_and_images` uses the retry,
+  title and image shapes fx 0.0.17 documents for ACP clients.
+- `live_handshake_and_new_session` and `live_accounts_run_side_by_side` are
+  `#[ignore]`d and need `fx` on PATH. They open sessions without prompting, so
+  they spend no tokens. The second checks what the app's sessions rely on: a
+  process started for an account runs on it beside others, a process keeps only
+  its newest session live, and none of it moves fx's saved default (the
+  `provider` key of `~/.fx/settings.json`). Its last assertion fails with "fx
+  now keeps two sessions live in one process" if fx ever lifts the
+  one-live-session limit.
+- `a_turn_counts_only_what_it_moved`: main.py already stood at +6 and the turn
+  took it to +7 −2, so the turn counts (1, 2). Another file changed too, but
+  the turn never touched it, so it is not counted.
+- `like_calls_fold_and_failures_stand_alone`: opening the run at item 1 lists
+  each read on its own row.
+- `inline_runs_cover_the_text_and_keep_links` holds that a markdown line's text
+  runs add up to the length of its text.
+- The `resets_on` fixture 1_795_424_400_000 ms is Monday 23 November 2026,
+  09:00 UTC.
+- The MCP address test uses config entries in exactly the shape `fx mcp add`
+  writes in fx 0.0.17.
+- The skill notice test uses the notice as fx 0.0.17 sends it, shortened to two
+  candidates.

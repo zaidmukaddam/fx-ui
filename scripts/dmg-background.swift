@@ -1,22 +1,50 @@
+// Draws the disk image's install window, as the "DMG — install window,
+// round two" artboard has it (D · Command): the install as one shell line
+// on black. Three chevrons are the prompt, `mv` the command, the two icons
+// its arguments and a block cursor ends the line, blinking.
+//
+//   swift dmg-background.swift <out.png>
+//
+// Writes an animated PNG at 2x, which Finder plays as the window's picture.
+//
+// Finder draws its own file names in black, which black hides, so the
+// names here are part of the drawing and sit just under where Finder puts
+// its own. The icon centres are in dmg-settings.py; move one and move the
+// other.
+
 import AppKit
 import CoreText
+import ImageIO
 
 let size = NSSize(width: 640, height: 360)
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
-let fonts = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-    .appendingPathComponent("../assets/dmg-fonts")
-for name in ["Geist-Regular", "Geist-Medium"] {
-    CTFontManagerRegisterFontsForURL(fonts.appendingPathComponent("\(name).otf") as CFURL, .process, nil)
+let here = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+CTFontManagerRegisterFontsForURL(
+    here.appendingPathComponent("../assets/fonts/GeistMono-Regular.ttf") as CFURL, .process, nil)
+
+func gray(_ value: Int) -> NSColor {
+    NSColor(calibratedWhite: CGFloat(value) / 255, alpha: 1)
 }
 
-func gray(_ value: CGFloat) -> NSColor {
-    NSColor(calibratedWhite: value, alpha: 1)
+func mono(_ points: CGFloat) -> NSFont {
+    NSFont(name: "GeistMono-Regular", size: points) ?? .monospacedSystemFont(ofSize: points, weight: .regular)
 }
 
-func label(_ text: String, x: CGFloat = 48, top: CGFloat, font: NSFont, color: NSColor, tracking: CGFloat = 0) {
+/// A rectangle given the way the artboard measures it: from the top left.
+func box(left: CGFloat, top: CGFloat, width: CGFloat, height: CGFloat) -> NSRect {
+    NSRect(x: left, y: size.height - top - height, width: width, height: height)
+}
+
+/// One line of type in a box `width` wide, `top` being the top of its line.
+func type(
+    _ text: String, left: CGFloat, top: CGFloat, width: CGFloat, height: CGFloat,
+    font: NSFont, color: NSColor, centred: Bool = false, tracking: CGFloat = 0
+) {
     let style = NSMutableParagraphStyle()
-    style.alignment = .center
-    (text as NSString).draw(in: NSRect(x: x, y: size.height - top - 80, width: size.width - x - 48, height: 80), withAttributes: [
+    style.alignment = centred ? .center : .left
+    style.minimumLineHeight = height
+    style.maximumLineHeight = height
+    (text as NSString).draw(in: box(left: left, top: top, width: width, height: height), withAttributes: [
         .font: font,
         .foregroundColor: color,
         .paragraphStyle: style,
@@ -24,10 +52,11 @@ func label(_ text: String, x: CGFloat = 48, top: CGFloat, font: NSFont, color: N
     ])
 }
 
-let representations = [1, 2].map { scale -> NSBitmapImageRep in
+/// The window with the cursor showing or not: the two frames of its blink.
+func frame(cursor: Bool) -> CGImage {
     let bitmap = NSBitmapImageRep(
-        bitmapDataPlanes: nil, pixelsWide: Int(size.width) * scale,
-        pixelsHigh: Int(size.height) * scale, bitsPerSample: 8,
+        bitmapDataPlanes: nil, pixelsWide: Int(size.width) * 2,
+        pixelsHigh: Int(size.height) * 2, bitsPerSample: 8,
         samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
     )!
@@ -35,38 +64,61 @@ let representations = [1, 2].map { scale -> NSBitmapImageRep in
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
 
-    gray(0.035).setFill()
+    NSColor.black.setFill()
     NSBezierPath(rect: NSRect(origin: .zero, size: size)).fill()
 
-    label("Install fx", top: 22, font: NSFont(name: "Geist-Medium", size: 32)!, color: gray(0.98), tracking: -1)
-    label("Drag fx to Applications.", top: 68,
-          font: NSFont(name: "Geist-Regular", size: 14)!, color: gray(0.70))
-
-    // Finder renders native filenames in black over image backgrounds.
-    // Give only the native filename captions a contrasting surface.
-    gray(0.72).setFill()
-    for center: CGFloat in [176, 464] {
-        NSBezierPath(roundedRect: NSRect(x: center - 72, y: 98, width: 144, height: 26),
-                     xRadius: 4, yRadius: 4).fill()
+    // The prompt: three chevrons, brightening as they go. Each is 7 wide
+    // and 14 tall in a 20pt slot, 2pt apart, level with the command.
+    let middle = size.height - 142
+    for (slot, shade) in [0x45, 0x7D, 0xC4].enumerated() {
+        let left = 89 + CGFloat(slot) * 22
+        let chevron = NSBezierPath()
+        chevron.move(to: NSPoint(x: left + 7, y: middle + 7))
+        chevron.line(to: NSPoint(x: left + 14, y: middle))
+        chevron.line(to: NSPoint(x: left + 7, y: middle - 7))
+        chevron.lineWidth = 2
+        chevron.lineCapStyle = .round
+        chevron.lineJoinStyle = .round
+        gray(shade).setStroke()
+        chevron.stroke()
     }
 
-    let arrow = NSBezierPath()
-    let arrowY = size.height - 184 // Same top-origin center as icon_locations in dmg-settings.py.
-    arrow.move(to: NSPoint(x: 296, y: arrowY))
-    arrow.line(to: NSPoint(x: 344, y: arrowY))
-    arrow.move(to: NSPoint(x: 336, y: arrowY + 8))
-    arrow.line(to: NSPoint(x: 344, y: arrowY))
-    arrow.line(to: NSPoint(x: 336, y: arrowY - 8))
-    arrow.lineWidth = 1.5
-    gray(0.65).setStroke()
-    arrow.stroke()
+    type("mv", left: 169, top: 116, width: 80, height: 52,
+         font: mono(44), color: gray(0xED), tracking: -0.88)
 
-    label("Once copied, open fx from Applications.", top: 310,
-          font: NSFont(name: "Geist-Regular", size: 13)!, color: gray(0.70))
+    // The arguments are the two icons Finder draws at 298 and 450; these
+    // name them, 144 wide under each.
+    type("fx.app", left: 226, top: 202, width: 144, height: 16,
+         font: mono(12), color: gray(0xA1), centred: true)
+    type("/Applications", left: 378, top: 202, width: 144, height: 16,
+         font: mono(12), color: gray(0xA1), centred: true)
+
+    if cursor {
+        gray(0xED).setFill()
+        NSBezierPath(rect: box(left: 526, top: 118, width: 24, height: 48)).fill()
+    }
+
+    type("# drag fx onto Applications. that's the whole install.",
+         left: 89, top: 266, width: 520, height: 20, font: mono(14), color: gray(0xA1))
+    type("# then open it from there",
+         left: 89, top: 292, width: 520, height: 20, font: mono(14), color: gray(0x7D))
 
     NSGraphicsContext.restoreGraphicsState()
-    return bitmap
+    return bitmap.cgImage!
 }
 
-try NSBitmapImageRep.representationOfImageReps(in: representations, using: .tiff, properties: [.compressionMethod: 5])!.write(to: output)
-try representations[1].representation(using: .png, properties: [:])!.write(to: output.deletingPathExtension().appendingPathExtension("png"))
+// Two frames, half a second each, for ever. 144 dpi makes Finder draw the
+// 1280 by 720 pixels in the window's 640 by 360 points.
+let image = CGImageDestinationCreateWithURL(output as CFURL, "public.png" as CFString, 2, nil)!
+CGImageDestinationSetProperties(
+    image, [kCGImagePropertyPNGDictionary: [kCGImagePropertyAPNGLoopCount: 0]] as CFDictionary)
+for cursor in [true, false] {
+    CGImageDestinationAddImage(image, frame(cursor: cursor), [
+        kCGImagePropertyPNGDictionary: [kCGImagePropertyAPNGDelayTime: 0.53],
+        kCGImagePropertyDPIWidth: 144,
+        kCGImagePropertyDPIHeight: 144,
+    ] as CFDictionary)
+}
+guard CGImageDestinationFinalize(image) else {
+    fatalError("could not write \(output.path)")
+}
