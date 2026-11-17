@@ -1,0 +1,9 @@
+pub mod changes;
+pub mod composer;
+pub mod dialogs;
+pub mod diff;
+pub mod home;
+pub mod palette;
+pub mod settings;
+pub mod shell;
+pub mod thread;
