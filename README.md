@@ -14,6 +14,7 @@ cargo run -- <folder>  # open it on a folder
 ```bash
 cargo test             # run the tests
 scripts/package.sh     # build dist/fx.app and dist/fx-<version>.dmg
+git config core.hooksPath .githooks  # check fmt and clippy before each push
 ```
 
 Building needs macOS, Rust 1.96 or newer and the Xcode command-line tools.
